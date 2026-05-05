@@ -1,10 +1,10 @@
 # Unix Text Processing
 
-Genomic data is, at its core, plain text. A FASTQ file from a sequencer is newline-delimited records. A VCF file from a variant caller is tab-separated columns with a header block. A GFF3 annotation is nine tab-delimited fields per feature, one line per record. Even a BAM alignment file, which is binary for efficiency, becomes tab-delimited text the moment you pass it through `samtools view`. This is not an accident — the Unix text-processing philosophy of flat, human-readable files was deliberately carried forward into bioinformatics precisely because it allows every standard Unix tool to work on genomic data without modification.
+Genomic data lives as plain text. Your FASTQ files are newline-delimited records. VCF files use tab-separated columns with a header block. A GFF3 annotation has nine tab-delimited fields per feature. Even BAM alignment files, though binary, convert instantly to tab-delimited text with `samtools view`. This wasn't accidental—Unix philosophy emphasizes flat, human-readable files, and bioinformatics inherited that directly. It means every standard Unix tool works on genomic data without modification.
 
-The practical consequence is profound: you do not need a custom script, a graphical database browser, or a specialized application to ask most questions about a genomic dataset. How many reads did this experiment produce? How many genes are on chromosome 3? What fraction of variants passed quality filters? All of these questions can be answered in seconds with a one-line Unix command. The tools you need — `grep`, `awk`, `cut`, `sort`, `sed`, and their companions — have been refined for fifty years to handle large, streaming text data efficiently.
+You don't need a custom script, a graphical database browser, or a specialized application to answer most questions. How many reads did this experiment produce? How many genes are on chromosome 3? What fraction of variants passed quality filters? Seconds at the command line. The tools—`grep`, `awk`, `cut`, `sort`, `sed`—have been refined for fifty years to handle large streaming text efficiently.
 
-This chapter builds a practical toolkit for text processing in bioinformatics. The tools are introduced individually, each with a concrete genomic use case, and then combined into real multi-step pipelines at the end. By the time you finish, a raw VCF or GFF file will feel like a spreadsheet you can query from the command line — faster, more reproducible, and far more scriptable than any GUI.
+This chapter builds a practical toolkit for text processing. Each tool appears with concrete genomic examples, then gets combined into real multi-step pipelines. By the end, a raw VCF or GFF file will feel like a spreadsheet you can query from the command line. It's faster, more reproducible, and far more scriptable than any GUI.
 
 ::: {.callout-note}
 ## File Formats You Will See in This Chapter
@@ -23,7 +23,7 @@ All six formats are plain text and are processed identically by Unix tools.
 
 ## `wc` — Counting Lines, Words, and Bytes
 
-Before doing anything with a file, you need to know its basic dimensions. `wc` (word count) answers this instantly.
+Before doing anything with a file, know its basic dimensions. `wc` (word count) answers this instantly.
 
 ```bash
 wc reads.fastq            # lines, words, and bytes all at once
@@ -84,7 +84,7 @@ This is the form used in the FASTQ read-count formula above.
 
 ## `grep` — Pattern Searching
 
-`grep` searches for lines matching a pattern and prints them to standard output. It is arguably the single most-used bioinformatics one-liner tool, because "find lines that match this pattern" covers an enormous range of tasks: extracting FASTA headers, filtering VCF chromosomes, locating genes in an annotation file, and much more.
+`grep` searches for lines matching a pattern and prints them. It's the most-used bioinformatics one-liner tool because "find lines that match this pattern" covers an enormous range of tasks: extracting FASTA headers, filtering VCF chromosomes, locating genes in an annotation file, and much more.
 
 ```bash
 grep "PATTERN" file.txt           # basic search
@@ -183,7 +183,7 @@ The speedup can be 3–10× on large files.
 
 ## Regular Expressions Primer {#sec-regex}
 
-`grep` becomes far more powerful when combined with regular expressions (regex) — a pattern language for describing text. Regular expressions describe *shapes* of text rather than exact strings, so one pattern can match thousands of different lines.
+`grep` becomes far more powerful with regular expressions (regex). These are pattern languages for describing text. Regular expressions describe *shapes* of text rather than exact strings, so one pattern can match thousands of different lines.
 
 ### Core Regex Syntax
 
@@ -265,12 +265,12 @@ Before running a regex on a 50 GB VCF, test it on the first 1000 lines:
 head -1000 variants.vcf | grep -E "YOUR_PATTERN"
 ```
 
-This is fast and lets you verify the pattern before committing to a long run.
+This is fast and lets you verify the pattern before running it on a large file.
 :::
 
 ## `cut` — Extracting Columns
 
-`cut` extracts specific columns (fields) from each line of a file. It is the simplest column-selection tool and is ideal when you know exactly which fields you want. Unlike `awk`, it cannot compute or filter — it only extracts.
+`cut` extracts specific columns (fields) from each line. Use it when you know exactly which fields you want. Unlike `awk`, it can't compute or filter—it only extracts.
 
 ```bash
 cut -f1,2,3 file.bed           # fields 1, 2, 3 (tab-delimited by default)
@@ -331,7 +331,7 @@ If fields are separated by variable whitespace, use `awk` instead.
 
 ## `sort` — Sorting Data
 
-`sort` is deceptively powerful. It handles alphabetical and numeric ordering, multi-key sorting, large files that exceed RAM, and deduplication. In bioinformatics, correctly sorting genomic coordinates is critical — many tools (BEDTools, tabix, GATK) require input to be sorted in a specific order.
+`sort` is deceptively powerful. It handles alphabetical and numeric ordering, multi-key sorting, large files that exceed RAM, and deduplication. Genomic coordinates must be sorted correctly—many tools (BEDTools, tabix, GATK) require input sorted in a specific order.
 
 ```bash
 sort file.txt                          # alphabetical, ascending
@@ -404,7 +404,7 @@ sort -S 8G -T /scratch/$USER/tmp -k1,1 -k2,2n big_bed_file.bed
 ::: {.callout-tip}
 ## Pro-Tip: `sort -u` Is Faster Than `sort | uniq`
 
-`sort -u` performs deduplication during the sort pass itself, which is faster than piping to `uniq` afterwards. Use `sort -u` when you only need unique lines and do not need the counts that `uniq -c` provides.
+`sort -u` deduplicates during the sort pass itself, which is faster than piping to `uniq` afterwards. Use `sort -u` when you only need unique lines and don't need the counts from `uniq -c`.
 :::
 
 ## `uniq` — Counting and Deduplicating
@@ -469,9 +469,9 @@ cut -f1 regions.bed | sort | uniq -c | sort -rn   # with counts
 
 ## `awk` — Column-Aware Processing {#sec-awk}
 
-`awk` is a complete mini-programming language embedded in Unix. While `cut` extracts columns and `grep` filters lines, `awk` can do both simultaneously, perform arithmetic, apply conditional logic, reformat output, and accumulate statistics across an entire file. It is the most powerful single-tool text processor in bioinformatics.
+`awk` is a complete mini-programming language embedded in Unix. Where `cut` extracts columns and `grep` filters lines, `awk` does both simultaneously, performs arithmetic, applies conditional logic, reformats output, and accumulates statistics across an entire file. It's the most powerful single-tool text processor in bioinformatics.
 
-The fundamental structure of every `awk` command is:
+Every `awk` command follows the same structure:
 
 ```
 awk 'CONDITION { ACTION }' file
@@ -635,7 +635,7 @@ As a rule of thumb: if you are reaching for `awk` arrays more than once, write a
 
 ## `sed` — Stream Editing {#sec-sed}
 
-`sed` (stream editor) processes a file line by line, applying editing commands. Its most common use is substitution (`s`), but it can also delete lines, extract ranges, and perform complex multi-operation edits. Unlike a text editor, `sed` processes data in a stream — it never loads the whole file into memory, which makes it efficient on large genomic files.
+`sed` (stream editor) processes a file line by line, applying editing commands. Its most common use is substitution (`s`), but it can also delete lines, extract ranges, and perform complex multi-operation edits. Unlike a text editor, `sed` never loads the whole file into memory—it processes data as a stream. This makes it efficient on large genomic files.
 
 ```bash
 sed 's/old/new/' file.txt           # replace first occurrence per line
@@ -735,7 +735,7 @@ sed -e 's/\r//' -e 's/^chr//' file.txt
 
 ## `tr` — Character Translation {#sec-tr}
 
-`tr` (translate) replaces or deletes individual characters. It does not work on patterns or fields — only single characters. It is useful for a set of classic bioinformatics tasks: complementing nucleotide sequences, removing non-printing characters, and reformatting file structure.
+`tr` (translate) replaces or deletes individual characters. It operates on characters only, not patterns or fields. It's useful for classic bioinformatics tasks: complementing nucleotide sequences, removing non-printing characters, and reformatting file structure.
 
 ```bash
 tr 'abc' 'ABC'              # replace a→A, b→B, c→C (character by character)
@@ -795,7 +795,7 @@ grep -v "^>" genome.fa | tr -cd 'GCgc' | wc -c
 
 ### `paste` — Side-by-Side Merging
 
-`paste` merges files horizontally — it reads one line from each file simultaneously and joins them with a tab (or a specified delimiter). Think of it as creating a new column from a second file.
+`paste` merges files horizontally. It reads one line from each file simultaneously and joins them with a tab (or a specified delimiter), creating a new column from the second file.
 
 ```bash
 paste file1.txt file2.txt              # merge two files side by side (tab-separated)
@@ -821,7 +821,7 @@ paste - - < single_column.txt > two_columns.tsv
 
 ### `join` — Merging on a Shared Key
 
-`join` performs a relational join on two sorted files that share a common key column. It is like a database `JOIN` operation: only lines with matching keys are merged.
+`join` performs a relational join on two sorted files sharing a common key column. It's like a database `JOIN` operation: only lines with matching keys merge.
 
 ```bash
 join file1.txt file2.txt              # join on column 1 (both files must be sorted)
@@ -890,7 +890,7 @@ echo $(($(zcat reads.fastq.gz | wc -l) / 4))
 
 ### `bgzip` and `tabix` — Indexed Genomic Compression
 
-Standard `gzip` cannot be randomly accessed — to read line 1,000,000 you must decompress everything before it. For large VCF and BED files, this is too slow. **bgzip** (block gzip) compresses in independent blocks so random access is possible, and **tabix** creates an index that maps genomic coordinates to block positions.
+Standard `gzip` can't be randomly accessed. To read line 1,000,000 you must decompress everything before it. For large VCF and BED files, that's too slow. **bgzip** (block gzip) compresses in independent blocks, enabling random access. **tabix** creates an index that maps genomic coordinates to block positions.
 
 ```bash
 # Compress a VCF with bgzip (not regular gzip!)
@@ -901,7 +901,7 @@ bgzip -@ 8 variants.vcf              # use 8 threads for compression
 tabix -p vcf variants.vcf.gz         # index a VCF
 tabix -p bed regions.bed.gz          # index a BED file
 
-# Random access by genomic region — instant, even in a 50 GB VCF
+# Random access by genomic region: instant, even in a 50 GB VCF
 tabix variants.vcf.gz chr1:1000000-2000000
 tabix variants.vcf.gz chr17:43044295-43125483    # BRCA1 region
 ```

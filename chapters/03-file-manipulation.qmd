@@ -2,7 +2,7 @@
 
 ## Working with Files Every Day
 
-A bioinformatician's daily work revolves around files — FASTA files of reference genomes, FASTQ files of sequencing reads, BAM files of alignments, VCF files of variants, and countless intermediate outputs. Knowing how to create, organize, view, search, and process these files efficiently from the command line is a core skill.
+A bioinformatician's daily work revolves around files: FASTA files of reference genomes, FASTQ files of sequencing reads, BAM files of alignments, VCF files of variants, and countless intermediate outputs. You need to know how to create, organize, view, search, and process these files efficiently from the command line.
 
 This chapter covers the essential Unix file manipulation tools and introduces the biological file formats you will encounter most often.
 
@@ -11,11 +11,11 @@ This chapter covers the essential Unix file manipulation tools and introduces th
 By the end of this chapter, you should be able to:
 
 1. Create, copy, move, and delete files and directories from the command line, including recursive operations.
-2. Inspect file metadata — size, permissions, modification time — and change permissions and ownership when needed.
+2. Inspect file metadata (size, permissions, modification time) and change permissions and ownership when needed.
 3. View, search, and stream the contents of plain-text and gzipped bioinformatics files without decompressing them to disk.
 4. Compress and archive files with `gzip`, `bgzip`, and `tar`, and choose the right format for genomic data.
 5. Recognize the most common biological file formats (FASTA, FASTQ, BAM, VCF, BED, GFF) and read them with standard Unix tools.
-6. Avoid the destructive command-line mistakes — recursive `rm`, accidental overwrite, lost output redirection — that destroy work on shared filesystems.
+6. Recognize destructive command-line mistakes (recursive `rm`, accidental overwrite, lost output redirection) that destroy work on shared filesystems, and learn how to avoid them.
 
 ## Creating and Organizing Files
 
@@ -44,7 +44,7 @@ For important data, always keep backups. On an HPC cluster, never store data onl
 
 ### Symbolic Links {#sec-symlinks}
 
-A **symbolic link** (symlink, or soft link) is a special file that acts as a pointer to another file or directory. Think of it as a shortcut — the symlink itself is tiny (just a path), but when you read from it, the system transparently follows the pointer to the actual data.
+A **symbolic link** (symlink, or soft link) is a pointer to another file or directory. The symlink itself is tiny (just a path), but when you read from it, the system transparently follows the pointer to the actual data.
 
 Symlinks are ubiquitous in bioinformatics because genomic data is large and often shared. A reference genome is 3 GB, a database of known variants might be 50 GB. You do not want ten lab members each keeping their own copy. Instead, one copy lives in a shared location, and everyone creates symlinks to it.
 
@@ -187,7 +187,7 @@ ls -lh rnaseq_project/data/
 ::: {.callout-tip}
 ## Pro-Tip: Symlinks and Workflow Managers
 
-Both Snakemake and Nextflow handle symlinks transparently — they follow the link and operate on the underlying file. This means you can organize your project with symlinks and run pipelines without any special configuration. Nextflow, in fact, uses symlinks internally in its `work/` directory to avoid copying large files between tasks.
+Both Snakemake and Nextflow handle symlinks transparently. They follow the link and operate on the underlying file, so you can organize your project with symlinks and run pipelines without any special configuration. Nextflow uses symlinks internally in its `work/` directory to avoid copying large files between tasks.
 :::
 
 #### Symbolic Links vs. Hard Links
@@ -212,7 +212,7 @@ ln -s original.txt symlink.txt
 ```
 
 ::: {.callout-note}
-## Why Not Just Copy?
+## When to Use Symlinks
 
 On HPC systems with shared parallel filesystems, copying a 50 GB reference database for every user and every project wastes storage quota and I/O bandwidth. Symlinks cost essentially zero storage and zero copy time. When 20 lab members all point to the same reference genome via symlinks, the cluster stores exactly one copy.
 :::
@@ -585,7 +585,7 @@ sed 's/\t/,/g' data.tsv > data.csv    # convert TSV to CSV
 
 ### `tr` — Character Translation
 
-`tr` changes or deletes individual characters. It is useful for quick cleanup tasks:
+`tr` changes or deletes individual characters. Use it for quick cleanup tasks:
 
 ```bash
 tr '[:lower:]' '[:upper:]' < seq.txt       # uppercase sequence text
@@ -773,14 +773,14 @@ The flags `-avz` mean: `-a` archive mode (preserves permissions, timestamps), `-
 In `rsync`, whether the source has a trailing slash matters:
 
 - `rsync -avz data/ server:/dest/` — copies the **contents** of `data/` into `server:/dest/`
-- `rsync -avz data server:/dest/` — copies the **directory** `data` into `server:/dest/`, creating `server:/dest/data/`
+- `rsync -avz data server:/dest/` copies the **directory** `data` into `server:/dest/`, creating `server:/dest/data/`
 
 When in doubt, use `-n` (dry run) first to see what will happen.
 :::
 
 ## Common Bioinformatics File Formats
 
-Understanding these formats is essential before you can manipulate them effectively.
+You need to know these formats to manipulate them effectively.
 
 ### FASTA
 

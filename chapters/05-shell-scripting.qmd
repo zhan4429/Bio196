@@ -1,0 +1,739 @@
+# Shell Scripting {#sec-shell-scripting}
+
+## Why Write Scripts?
+
+Imagine you have just figured out the exact sequence of commands to align a paired-end RNA-seq sample: download the data, trim adapters, align with `STAR`, sort with `samtools`, and count with `featureCounts`. Getting those commands right took an afternoon of debugging. Now you have 24 more samples to process.
+
+You could retype the commands for each sample — tedious, error-prone, and irreproducible. Or you could collect those commands into a **shell script**: a plain-text file that the shell executes just as if you had typed each command yourself.
+
+Scripts bring three major benefits to bioinformatics:
+
+1. **Reproducibility** — the exact commands that produced your results are recorded in a file
+2. **Automation** — run 24 samples with one command instead of 24 manual sessions
+3. **Reusability** — a well-written alignment script works for any project that uses the same tool
+
+::: {.callout-note}
+## Scripts as Documentation
+
+A shell script is simultaneously code and documentation. When you look at an analysis six months later, the script tells you exactly what was done and in what order. This is far more reliable than notes in a lab notebook — the script is the ground truth.
+:::
+
+## Your First Script
+
+A shell script is a plain text file. Use a text editor like VS Code, nano, or vim — **never** a word processor like Microsoft Word, which silently inserts invisible formatting characters that will break your script.
+
+Save the following as `hello_bio.sh`:
+
+```bash
+#!/usr/bin/env bash
+# My first bioinformatics script
+# This script greets the user and prints basic system info.
+
+echo "Hello, Bioinformatics!"
+echo "Today is: $(date)"
+echo "You are running: $(uname -s)"
+echo "Your working directory: $(pwd)"
+```
+
+The first line `#!/usr/bin/env bash` is the **shebang**. It tells the operating system which interpreter to use. Using `/usr/bin/env bash` rather than `/bin/bash` is more portable — it finds `bash` wherever it is installed on the system.
+
+Now make the script executable and run it:
+
+```bash
+chmod +x hello_bio.sh
+./hello_bio.sh
+```
+
+Alternatively, you can always run a script by passing it directly to `bash`:
+
+```bash
+bash hello_bio.sh
+```
+
+## Shebang Lines: Choosing the Interpreter
+
+A shebang line starts with `#!` and must be the **first line** of an executable script.
+When you run a script directly, such as `./hello_bio.sh`, the operating system reads the
+shebang and uses it to decide which program should interpret the file.
+
+For Bash scripts, use:
+
+```bash
+#!/usr/bin/env bash
+```
+
+For Python scripts, use:
+
+```python
+#!/usr/bin/env python3
+
+print("Hello from Python")
+```
+
+For R scripts, use:
+
+```r
+#!/usr/bin/env Rscript
+
+message("Hello from R")
+```
+
+Then make the script executable and run it by path:
+
+```bash
+chmod +x script.py
+./script.py
+
+chmod +x analysis.R
+./analysis.R
+```
+
+The shebang only matters when you run the file directly. If you run:
+
+```bash
+bash hello_bio.sh
+python3 script.py
+Rscript analysis.R
+```
+
+then the command you typed (`bash`, `python3`, or `Rscript`) chooses the interpreter, and
+the shebang is mostly documentation.
+
+::: {.callout-tip}
+## Prefer `/usr/bin/env`
+
+Use `#!/usr/bin/env bash`, `#!/usr/bin/env python3`, and `#!/usr/bin/env Rscript` in
+course scripts. This respects the active environment, including Conda environments and
+HPC module settings. Hard-coded paths like `#!/usr/bin/python3` may point to the wrong
+interpreter on another computer or cluster.
+:::
+
+### Writing Good Comments
+
+Comments (lines starting with `#`) are one of the most important ingredients of a good script. A script without comments is a list of cryptic commands that even you will not understand in two weeks.
+
+Recommended commenting style:
+- A brief description block at the top of every script
+- A short comment before each meaningful action
+- Comments that add *why*, not just *what*
+
+```bash
+#!/usr/bin/env bash
+# align_sample.sh — Align a paired-end sample to a reference genome.
+# Usage: bash align_sample.sh <sample_id>
+# Requires: bwa, samtools
+
+# The sample identifier (from command line argument)
+SAMPLE=$1
+
+# Index must already exist at REF.bwt for bwa to work.
+REF=/shared/genomes/hg38/hg38.fa
+
+# Align and sort in one step to avoid a large intermediate SAM file.
+bwa mem -t 8 ${REF} ${SAMPLE}_R1.fastq.gz ${SAMPLE}_R2.fastq.gz \
+    | samtools sort -o ${SAMPLE}.sorted.bam
+
+# Index the BAM so downstream tools can access it by coordinate.
+samtools index ${SAMPLE}.sorted.bam
+```
+
+## Variables
+
+Variables are the most important refactoring tool in shell scripting. They let you change a value in one place rather than hunting for every occurrence throughout the script.
+
+### Assignment
+
+```bash
+SAMPLE=SRR519926        # correct — no spaces around =
+THREADS=8
+OUTPUT_DIR=results/aligned
+
+# WRONG: this will cause an error
+# bash interprets this as running a command named "SAMPLE"
+SAMPLE = SRR519926
+```
+
+::: {.callout-warning}
+## No Spaces Around `=`
+
+In bash, `SAMPLE=SRR519926` sets the variable. `SAMPLE = SRR519926` tries to run a program called `SAMPLE` with arguments `=` and `SRR519926`. You will get `bash: SAMPLE: command not found`. This is one of the most common beginner errors.
+:::
+
+### Using Variables
+
+Always use the `${VAR}` (curly brace) syntax rather than `$VAR`. It is unambiguous and works within larger strings:
+
+```bash
+SAMPLE=SRR519926
+
+# Recommended — unambiguous
+echo "Processing ${SAMPLE}"
+fastqc ${SAMPLE}_R1.fastq.gz ${SAMPLE}_R2.fastq.gz -o ${SAMPLE}_qc/
+
+# Can be ambiguous without braces
+# bash looks for variable SAMPLE_extra, not SAMPLE
+echo "Processing $SAMPLE_extra"
+echo "Processing ${SAMPLE}_extra" # correct — explicitly uses SAMPLE
+```
+
+### Command Substitution
+
+Use `$(command)` to capture the output of a command and assign it to a variable:
+
+```bash
+DATE=$(date +%Y-%m-%d)
+READ_COUNT=$(grep -c "^@" reads.fastq)
+NSEQS=$(grep -c "^>" genome.fa)
+
+echo "Analysis date: ${DATE}"
+echo "Input reads: ${READ_COUNT}"
+```
+
+::: {.callout-tip}
+## Pro-Tip: Capture Metadata Into Variables
+
+At the start of a script, capture any computed metadata (file sizes, read counts, timestamps) into variables. Log them at the end. This creates a self-documenting audit trail:
+
+```bash
+START_TIME=$(date +%s)
+# ... your analysis ...
+END_TIME=$(date +%s)
+ELAPSED=$(( END_TIME - START_TIME ))
+echo "Analysis complete. Elapsed time: ${ELAPSED} seconds."
+```
+:::
+
+### Special Variables
+
+Bash provides several built-in variables:
+
+| Variable | Meaning |
+|----------|---------|
+| `$0` | Script name |
+| `$1`, `$2`, ... | Positional arguments |
+| `$@` | All arguments as a list |
+| `$#` | Number of arguments |
+| `$?` | Exit code of the last command (0 = success) |
+| `$$` | PID of the current shell |
+| `$!` | PID of the last background process |
+
+## Strict Mode: `set -uex`
+
+By default, bash will silently continue running even after a command fails. This can lead to cascading errors that are very hard to debug — your script might "succeed" while producing incorrect results.
+
+Add the following to the top of every script you write:
+
+```bash
+set -uex
+```
+
+This sets three flags simultaneously:
+
+| Flag | Effect |
+|------|--------|
+| `-u` | Treat unset variables as errors (prevents typos like `${SMPLE}` silently expanding to nothing) |
+| `-e` | Exit immediately on error (any command returning non-zero) |
+| `-x` | Print each command before executing it (invaluable for debugging) |
+
+```bash
+#!/usr/bin/env bash
+# Good practice: strict mode at the top
+set -uex
+
+SAMPLE=$1
+bwa mem genome.fa ${SAMPLE}_R1.fastq ${SAMPLE}_R2.fastq > ${SAMPLE}.sam
+samtools sort ${SAMPLE}.sam -o ${SAMPLE}.bam
+samtools index ${SAMPLE}.bam
+```
+
+With `-e`, if `bwa mem` fails (e.g., if the input file does not exist), the script will stop immediately at that line rather than attempting to sort a non-existent SAM file.
+
+::: {.callout-warning}
+## Caveat: `-e` and `grep`
+
+`grep` exits with code 1 when it finds no matches, which `-e` interprets as an error. If you expect grep might not find a match but that is not an error, use the `|| true` workaround:
+
+```bash
+grep "PASS" variants.vcf > pass_variants.vcf || true
+```
+
+The `|| true` means "if this command fails, succeed anyway."
+:::
+
+## Command-Line Arguments
+
+Making scripts accept arguments turns them into reusable tools:
+
+```bash
+#!/usr/bin/env bash
+set -uex
+# Usage: bash align.sh <sample_id> <threads>
+
+SAMPLE=$1
+THREADS=${2:-8}    # use argument $2, or 8 as a default if not provided
+REF=/shared/genomes/hg38/hg38.fa
+
+echo "Aligning ${SAMPLE} with ${THREADS} threads..."
+bwa mem -t ${THREADS} ${REF} \
+    ${SAMPLE}_R1.fastq.gz \
+    ${SAMPLE}_R2.fastq.gz \
+    | samtools sort -@ ${THREADS} -o ${SAMPLE}.sorted.bam
+samtools index ${SAMPLE}.sorted.bam
+```
+
+Run it as:
+```bash
+bash align.sh SRR519926 16
+bash align.sh SRR519926        # uses default of 8 threads
+```
+
+### Validating Arguments
+
+Always check that required arguments were provided:
+
+```bash
+#!/usr/bin/env bash
+set -uex
+
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <sample_id> <output_dir>" >&2
+    exit 1
+fi
+
+SAMPLE=$1
+OUTDIR=$2
+```
+
+The `>&2` redirects the error message to stderr (the conventional destination for error messages, separate from normal output).
+
+## Conditionals
+
+### `if` / `elif` / `else`
+
+```bash
+if [ condition ]; then
+    # commands
+elif [ other_condition ]; then
+    # commands
+else
+    # commands
+fi
+```
+
+### File and String Tests
+
+The most common conditions in bioinformatics scripts test whether files and directories exist:
+
+| Test | True when |
+|------|-----------|
+| `-f file` | File exists and is a regular file |
+| `-d dir` | Directory exists |
+| `-e path` | Path exists (file or directory) |
+| `-s file` | File exists and is not empty |
+| `-r file` | File is readable |
+| `-x file` | File is executable |
+| `str1 == str2` | Strings are equal |
+| `str1 != str2` | Strings are not equal |
+| `-z str` | String is empty |
+| `-n str` | String is not empty |
+| `$a -eq $b` | Numbers are equal |
+| `$a -lt $b` | Number `a` is less than `b` |
+| `$a -gt $b` | Number `a` is greater than `b` |
+
+Example:
+
+```bash
+#!/usr/bin/env bash
+set -uex
+
+REF=genome.fa
+SAMPLE=$1
+
+if [ ! -f "${REF}" ]; then
+    echo "ERROR: Reference genome ${REF} not found." >&2
+    exit 1
+fi
+
+if [ ! -f "${SAMPLE}_R1.fastq.gz" ]; then
+    echo "ERROR: Input file ${SAMPLE}_R1.fastq.gz not found." >&2
+    exit 1
+fi
+
+echo "All inputs found. Starting alignment..."
+bwa mem ${REF} ${SAMPLE}_R1.fastq.gz ${SAMPLE}_R2.fastq.gz > ${SAMPLE}.sam
+```
+
+## Loops
+
+### `for` Loops
+
+`for` loops repeat a block of commands over a list of items:
+
+```bash
+for SAMPLE in SRR519926 SRR519927 SRR519928; do
+    echo "Processing ${SAMPLE}..."
+    fastqc ${SAMPLE}_R1.fastq.gz -o qc/
+done
+```
+
+You can also loop over a file containing sample names (one per line):
+
+```bash
+while read SAMPLE; do
+    echo "Aligning ${SAMPLE}..."
+    bash align.sh ${SAMPLE}
+done < samples.txt
+```
+
+Or loop over files — with the important caveat that you should know exactly which files you are iterating over:
+
+```bash
+for BAM in results/aligned/*.sorted.bam; do
+    samtools flagstat ${BAM} > ${BAM%.sorted.bam}.flagstat.txt
+done
+```
+
+The expression `${BAM%.sorted.bam}` strips the suffix `.sorted.bam` from the variable value — a useful bash string manipulation trick.
+
+::: {.callout-warning}
+## The Danger of `for FILE in *.fastq`
+
+Matching files with shell wildcards is fragile:
+
+- The order is not guaranteed to be consistent
+- The pattern may accidentally match files you did not intend to include
+- If no files match, the loop variable is literally set to `*.fastq`
+
+A safer approach (shown in the next section) is to build file names explicitly from a list of sample identifiers.
+:::
+
+### `while` Loops
+
+`while` loops run as long as a condition is true:
+
+```bash
+# Process a file line by line
+while IFS= read -r line; do
+    echo "Line: ${line}"
+done < data.txt
+
+# Wait for a background job to finish
+while [ ! -f results.done ]; do
+    sleep 60
+    echo "Still waiting..."
+done
+```
+
+## GNU `parallel`: A Better Way to Loop {#sec-parallel}
+
+![Sequential execution wastes CPU cores. GNU `parallel` keeps all cores busy, reducing wall-clock time proportionally.](../images/03-parallel-execution.png){fig-align="center" width="88%"}
+
+For loops in bash run one command at a time. On modern computers — and especially on HPC clusters — this wastes available CPU cores. **GNU `parallel`** solves this by running multiple commands simultaneously, one per available CPU core.
+
+::: {.callout-note}
+## The Parallel Philosophy
+
+`parallel` shifts your thinking from "loop over file names" to "apply a pattern to a list of roots." This produces cleaner, safer, and faster code. It is the recommended approach for any bioinformatics batch processing.
+:::
+
+### Installing `parallel`
+
+```bash
+# macOS
+brew install parallel
+
+# Linux (Debian/Ubuntu)
+sudo apt-get install parallel
+
+# Conda
+conda install -c conda-forge parallel
+```
+
+### Basic Usage
+
+```bash
+# Run a command for each item in a list
+parallel echo "Hello {}" ::: Alice Bob Carol
+
+# Process files from a list
+cat samples.txt | parallel fastqc {}_R1.fastq.gz -o qc/
+
+# Dry run — preview commands without running them
+cat samples.txt | parallel --dry-run fastqc {}_R1.fastq.gz -o qc/
+
+# Limit to 4 simultaneous jobs
+cat samples.txt | parallel -j 4 fastqc {}_R1.fastq.gz -o qc/
+```
+
+The `{}` is the substitution placeholder — `parallel` replaces it with each item from the input.
+
+### Building Commands from Sample Lists
+
+The key insight is to maintain a `samples.txt` file with one sample identifier per line, then build all file names from those roots:
+
+```bash
+# samples.txt contains:
+# SRR519926
+# SRR519927
+# SRR519928
+
+# Build paired-end file names explicitly from the root
+cat samples.txt | parallel \
+    "bwa mem -t 4 genome.fa {}_R1.fastq.gz {}_R2.fastq.gz \
+     | samtools sort -o {}.sorted.bam"
+```
+
+Compare this to the fragile glob-based approach:
+```bash
+# Fragile — don't do this
+for F in *_R1.fastq.gz; do
+    BASE=${F%_R1.fastq.gz}
+    bwa mem genome.fa ${F} ${BASE}_R2.fastq.gz \
+        | samtools sort -o ${BASE}.sorted.bam
+done
+```
+
+The `parallel` version is shorter, safer, and runs on all cores simultaneously.
+
+::: {.callout-tip}
+## Pro-Tip: Always Use `--dry-run` First
+
+Before running `parallel` on 100 samples, always preview what it will do:
+
+```bash
+cat samples.txt | parallel --dry-run \
+    "bwa mem genome.fa {}_R1.fastq.gz {}_R2.fastq.gz > {}.sam"
+```
+
+This prints the exact commands that would be executed, letting you catch errors in your patterns before committing to a long run.
+:::
+
+## Functions
+
+Functions let you group related commands and reuse them within a script:
+
+```bash
+#!/usr/bin/env bash
+set -uex
+
+# Function definition
+align_sample() {
+    local SAMPLE=$1
+    local REF=$2
+    local THREADS=${3:-8}
+
+    echo "Aligning ${SAMPLE}..."
+    bwa mem -t ${THREADS} ${REF} \
+        ${SAMPLE}_R1.fastq.gz \
+        ${SAMPLE}_R2.fastq.gz \
+        | samtools sort -@ ${THREADS} -o ${SAMPLE}.sorted.bam
+    samtools index ${SAMPLE}.sorted.bam
+    echo "Done: ${SAMPLE}.sorted.bam"
+}
+
+# Call the function
+REF=/shared/genomes/hg38/hg38.fa
+align_sample SRR519926 ${REF} 16
+align_sample SRR519927 ${REF} 16
+```
+
+The `local` keyword restricts variables to the function scope, preventing accidental interference with global variables of the same name.
+
+## Advanced `parallel` Patterns
+
+### Multiple Input Sources
+
+`parallel` can combine multiple input lists, generating all combinations or paired values:
+
+```bash
+# All combinations of samples and conditions
+parallel echo "Sample={1} Condition={2}" ::: S1 S2 S3 ::: treated control
+
+# Paired inputs with --link (process pairs together)
+parallel --link \
+    "fastp -i {1} -I {2} -o {1/.}.trimmed.fq -O {2/.}.trimmed.fq" \
+    ::: *_R1.fastq.gz ::: *_R2.fastq.gz
+```
+
+### Column Splitting with `--colsep`
+
+When a file has multiple columns, `--colsep` lets you use each column as a separate substitution:
+
+```bash
+# samples.tsv: sample_id  condition  replicate
+cat samples.tsv | parallel --colsep '\t' \
+    "bash align.sh {1} {2} {3}"
+```
+
+### Keeping Output Organized
+
+```bash
+# Save stdout and stderr per job in structured directories
+cat samples.txt | parallel --results logs/ \
+    "fastqc {}_R1.fastq.gz -o qc/"
+# Creates: logs/1/stdout, logs/1/stderr, logs/2/stdout, ...
+
+# Add a progress bar
+cat samples.txt | parallel --progress fastqc {} -o qc/
+
+# Limit parallelism to avoid overwhelming the system
+cat samples.txt | parallel -j 4 bwa mem genome.fa {} '>' {.}.sam
+```
+
+## Practical Example: A Batch QC and Alignment Pipeline
+
+Here is a complete, realistic script that takes a directory of paired FASTQ files, runs quality control, and aligns them to a reference genome:
+
+```bash
+#!/usr/bin/env bash
+# batch_align.sh — Quality check and align all samples in a directory.
+#
+# Usage: bash batch_align.sh <samples_file> <reference> <outdir> [threads]
+# Example: bash batch_align.sh samples.txt hg38.fa results/ 16
+#
+# Requirements: fastqc, multiqc, bwa, samtools, parallel
+
+set -uex
+
+# ── Arguments ─────────────────────────────────────────────────────────────
+SAMPLES_FILE=$1
+REF=$2
+OUTDIR=$3
+THREADS=${4:-8}
+
+# ── Validate inputs ───────────────────────────────────────────────────────
+if [ $# -lt 3 ]; then
+    echo "Usage: $0 <samples_file> <reference> <outdir> [threads]" >&2
+    exit 1
+fi
+
+if [ ! -f "${SAMPLES_FILE}" ]; then
+    echo "ERROR: Samples file not found: ${SAMPLES_FILE}" >&2
+    exit 1
+fi
+
+if [ ! -f "${REF}" ]; then
+    echo "ERROR: Reference genome not found: ${REF}" >&2
+    exit 1
+fi
+
+# ── Set up output directories ─────────────────────────────────────────────
+mkdir -p ${OUTDIR}/qc ${OUTDIR}/aligned ${OUTDIR}/logs
+
+echo "Starting pipeline: $(date)"
+echo "  Samples: ${SAMPLES_FILE}"
+echo "  Reference: ${REF}"
+echo "  Threads per job: ${THREADS}"
+echo "  Output: ${OUTDIR}"
+
+# ── Step 1: Quality control ───────────────────────────────────────────────
+echo "=== Step 1: FastQC ==="
+cat ${SAMPLES_FILE} | parallel -j 4 \
+    "fastqc {}_R1.fastq.gz {}_R2.fastq.gz \
+     -o ${OUTDIR}/qc/ \
+     2> ${OUTDIR}/logs/{}_fastqc.log"
+
+# Aggregate QC reports with MultiQC
+multiqc ${OUTDIR}/qc/ -o ${OUTDIR}/qc/ 2> ${OUTDIR}/logs/multiqc.log
+
+# ── Step 2: Alignment ─────────────────────────────────────────────────────
+echo "=== Step 2: Alignment ==="
+
+# Check that BWA index exists
+if [ ! -f "${REF}.bwt" ]; then
+    echo "Building BWA index for ${REF}..."
+    bwa index ${REF}
+fi
+
+cat ${SAMPLES_FILE} | parallel -j 2 \
+    "bwa mem -t ${THREADS} ${REF} {}_R1.fastq.gz {}_R2.fastq.gz \
+     2> ${OUTDIR}/logs/{}_bwa.log \
+     | samtools sort -@ ${THREADS} -o ${OUTDIR}/aligned/{}.sorted.bam \
+     && samtools index ${OUTDIR}/aligned/{}.sorted.bam"
+
+# ── Step 3: Alignment statistics ──────────────────────────────────────────
+echo "=== Step 3: Flagstat ==="
+cat ${SAMPLES_FILE} | parallel \
+    "samtools flagstat ${OUTDIR}/aligned/{}.sorted.bam \
+     > ${OUTDIR}/logs/{}_flagstat.txt"
+
+echo "Pipeline complete: $(date)"
+echo "Results in: ${OUTDIR}"
+```
+
+This script demonstrates:
+- Argument validation with helpful usage messages
+- Organized output directories
+- `parallel` for parallel execution
+- Error log capture per sample
+- A logical progression of steps
+
+## Error Handling Patterns
+
+### Exit on Failure
+
+`set -e` exits on any error. For critical steps, you can also explicitly check exit codes:
+
+```bash
+bwa mem genome.fa reads_R1.fq reads_R2.fq > aligned.sam
+if [ $? -ne 0 ]; then
+    echo "ERROR: BWA alignment failed" >&2
+    exit 1
+fi
+```
+
+Or more concisely:
+```bash
+bwa mem genome.fa reads_R1.fq reads_R2.fq > aligned.sam \
+    || { echo "BWA failed" >&2; exit 1; }
+```
+
+### Cleanup on Exit (Trap)
+
+Use `trap` to run cleanup commands when the script exits — even if it exits due to an error. This ensures temporary files are removed:
+
+```bash
+TMPDIR=$(mktemp -d)
+trap "rm -rf ${TMPDIR}" EXIT
+
+# Work with temp files — they will be cleaned up automatically
+bwa mem genome.fa reads.fq > ${TMPDIR}/aligned.sam
+samtools sort ${TMPDIR}/aligned.sam -o final.bam
+```
+
+## Summary
+
+| Concept | Syntax / Tool |
+|---------|---------------|
+| Shebang | `#!/usr/bin/env bash` |
+| Strict mode | `set -uex` |
+| Variables | `VAR=value`, `${VAR}` |
+| Command substitution | `$(command)` |
+| Arguments | `$1`, `$2`, `$@`, `$#` |
+| Conditionals | `if [ -f file ]`, `if [ $a -eq $b ]` |
+| Loops | `for`, `while` |
+| Parallel processing | `parallel`, `cat list.txt \| parallel cmd {}` |
+| Functions | `fname() { local VAR=$1; ... }` |
+| Error handling | `set -e`, `$?`, `trap` |
+
+## Exercises
+
+1. Write a script `count_seqs.sh` that accepts a directory as an argument and counts the number of sequences (lines starting with `>`) in every `.fa` file it finds. Print results in the format: `filename: count`. Add validation to check the directory exists.
+
+2. Modify the batch FastQC script from this chapter to:
+   a. Accept a minimum quality threshold as a fourth argument
+   b. After MultiQC, check whether any sample failed QC (hint: look for "FAIL" in the FastQC reports)
+   c. Write the names of failed samples to a file called `failed_samples.txt`
+
+3. Rewrite the following fragile loop using `parallel`. Create a `samples.txt` file first:
+   ```bash
+   for FQ in data/*.fastq.gz; do
+       fastqc $FQ -o qc/
+   done
+   ```
+
+4. Write a function `check_tool()` that takes a tool name as an argument and checks whether it is available in the `$PATH` (hint: use `which` or `command -v`). Call it at the top of a script to verify that `bwa`, `samtools`, and `fastqc` are all installed before proceeding.
+
+5. Write a script that wraps `samtools flagstat` and parses its output to extract the mapped reads percentage. If the mapping rate is below 80%, print a warning to stderr. Test it on a real BAM file.
+
+6. Use `trap` to write a script that creates a temporary directory, does some work inside it, and guarantees cleanup even if the script is interrupted with `Ctrl+C`.

@@ -21,11 +21,11 @@ This works for one sample. Then the realities of genomics set in:
 - A collaborator tries to reproduce your analysis. Their `samtools` is version 1.13 instead of 1.20, and the output format has changed.
 - You discover a better trimming tool. Changing one step means manually tracing every downstream dependency.
 
-None of these problems are about biology. They are engineering problems — dependency management, parallelization, fault tolerance, and portability. This is exactly what workflow managers solve.
+None of these problems are about biology. They're engineering problems: dependency management, parallelization, fault tolerance, portability. Workflow managers exist to solve precisely this.
 
 ## What a Workflow Manager Does
 
-A workflow manager automates the execution of multi-step analyses by handling:
+What does a workflow manager actually do? It automates multi-step analyses by handling:
 
 | Problem | How Workflow Managers Solve It |
 |---------|-------------------------------|
@@ -38,7 +38,7 @@ A workflow manager automates the execution of multi-step analyses by handling:
 
 ### The Directed Acyclic Graph (DAG)
 
-At its core, every workflow manager represents your pipeline as a **DAG** — a Directed Acyclic Graph. Each node is a task (run FastQC, align reads, call variants). Edges represent dependencies (alignment depends on trimming, which depends on raw data). The manager walks the graph, executing tasks in the correct order and parallelizing wherever possible.
+Every workflow manager represents your pipeline as a **DAG** — a Directed Acyclic Graph. Each node is a task (run FastQC, align reads, call variants). Edges represent dependencies: alignment depends on trimming, which depends on raw data. The manager walks this graph, executing tasks in the right order and parallelizing wherever it can.
 
 ```
     sample1.fastq.gz    sample2.fastq.gz    sample3.fastq.gz
@@ -183,9 +183,9 @@ Both managers support resuming after failure, but the mechanisms differ:
 ## When to Choose Which {#sec-when-to-choose}
 
 ::: {.callout-note}
-## The Honest Answer
+## How to Choose
 
-Both tools are excellent. For most bioinformatics workflows, either will serve you well. The choice often comes down to your team's existing skills and what your community uses. Here are some guidelines:
+For most bioinformatics workflows, either tool will work fine. The real choice is simpler: what does your team already know? What do your collaborators use? Here's what tilts the balance:
 :::
 
 **Choose Snakemake when:**
@@ -337,10 +337,10 @@ This takes 5 minutes and prevents the most common pipeline disasters.
 
 ## What Comes Next
 
-The rest of this week focuses on the tools used most directly in this course:
+This course digs into two specific tools:
 
-- **Nextflow** (@sec-nextflow): processes, channels, configuration profiles, HPC/cloud execution, and custom pipeline development.
-- **nf-core** (@sec-nfcore): production-quality Nextflow pipelines built by the community.
+- **Nextflow** (@sec-nextflow): how processes and channels work, configuration profiles, and how to run on HPC or cloud.
+- **nf-core** (@sec-nfcore): the community library of production-ready Nextflow pipelines.
 
 ## Exercises
 

@@ -2,13 +2,13 @@
 
 ## Why HPC Needs a Different Container Runtime
 
-Docker is powerful, but it has a fundamental problem for shared computing environments: the Docker daemon runs as **root**. On your personal laptop, this is fine. On a shared HPC cluster with hundreds of users and petabytes of research data, giving every user an avenue to root access is a non-starter. System administrators will not — and should not — allow it.
+Docker is powerful, but it has a fundamental problem on shared systems: the Docker daemon runs as **root**. On your personal laptop, that's fine. But on a shared HPC cluster with hundreds of users and petabytes of data, giving every user a path to root access is unacceptable. System administrators can't allow it.
 
-**Singularity** was created in 2015 by Gregory Kurtzer at Lawrence Berkeley National Laboratory to solve exactly this problem. It was designed from the ground up for scientific computing on multi-user systems, with three design principles:
+**Singularity**, created in 2015 by Gregory Kurtzer at Lawrence Berkeley National Laboratory, was built specifically to solve this problem. It's designed for scientific computing on multi-user systems from the ground up:
 
-1. **No daemon, no root at runtime.** Containers run as regular user processes under the user's own UID/GID.
-2. **Integration, not isolation.** By default, containers can see the host's filesystems, network, and environment — they are an extension of your session, not a walled-off sandbox.
-3. **Single-file images.** A container is one portable `.sif` file that you can `cp`, `scp`, or `rsync` — no layers, no registry required.
+- Containers run as regular user processes under your own UID/GID — no daemon, no root required.
+- By default, containers can see your home directory, your current working directory, and your environment variables. They're an extension of your session, not a walled-off sandbox.
+- A container is a single, portable `.sif` file. You can `cp`, `scp`, or `rsync` it anywhere — no layers, no registry needed.
 
 ::: {.callout-note}
 ## Singularity → Apptainer: What Changed?
@@ -35,11 +35,11 @@ module spider singularity
 
 ### The SIF File
 
-Unlike Docker, which stores images as layered filesystems managed by a daemon, Apptainer packages everything into a single **Singularity Image Format (SIF)** file. A `.sif` file is:
+Docker stores images as layered filesystems managed by a daemon. Apptainer does something different: it packages everything into a single **Singularity Image Format (SIF)** file. A `.sif` file has three key properties:
 
-- **Immutable**: read-only by default, which is good for reproducibility.
-- **Portable**: one file you can copy anywhere — no registry pull required.
-- **Self-contained**: includes the entire filesystem, metadata, and cryptographic signatures.
+- **Immutable:** read-only by default, which makes it easy to reproduce.
+- **Portable:** it's one file you can copy anywhere without needing to pull from a registry.
+- **Self-contained:** the entire filesystem, metadata, and even cryptographic signatures are bundled in.
 
 ```bash
 ls -lh samtools_1.20.sif
@@ -48,14 +48,14 @@ ls -lh samtools_1.20.sif
 
 ### No Isolation by Default
 
-This is the single biggest conceptual difference from Docker. When you run an Apptainer container:
+Here's the biggest difference between Apptainer and Docker. When you run an Apptainer container:
 
-- Your **home directory** is automatically mounted and accessible.
-- Your **current working directory** is preserved — you start in the same path.
-- Your **user identity** is the same (same UID, same GID, same permissions).
-- **Environment variables** from the host are passed through.
+- Your home directory is automatically mounted and accessible.
+- You stay in the same working directory where you started.
+- Your user identity doesn't change (same UID, same GID, same permissions).
+- Host environment variables are passed through to the container.
 
-This means you can often use Apptainer as a transparent wrapper around a tool — your data is already accessible, and output files are written where you expect them.
+This design makes Apptainer feel like a transparent wrapper around a tool. Your data is already there, and output files end up where you expect them.
 
 ```bash
 # This "just works" — no -v mounts needed
@@ -66,7 +66,7 @@ apptainer exec samtools_1.20.sif samtools sort input.bam -o sorted.bam
 
 ### Pulling from Docker Hub and Registries
 
-The most common way to get a bioinformatics container is to pull from Docker Hub or Quay.io. Apptainer converts the Docker image into a SIF file automatically:
+Most bioinformatics containers live on Docker Hub or Quay.io. You can pull them directly with Apptainer, and it'll convert the Docker image into a SIF file automatically:
 
 ```bash
 # Pull from Docker Hub
@@ -98,7 +98,7 @@ apptainer exec star_2.7.11b--h43eeafb_0.sif STAR --genomeDir ref/ ...
 
 ### Pulling from the Singularity/OCI Library
 
-Apptainer also supports pulling from OCI-compliant registries and the legacy Singularity library:
+You can also pull from OCI-compliant registries and the older Singularity library:
 
 ```bash
 # From an OCI registry
@@ -110,7 +110,7 @@ apptainer pull library://ubuntu:22.04
 
 ### Cache Management
 
-Downloaded layers are cached in `~/.apptainer/cache`. On HPC systems with limited home directory quotas, this can fill up fast:
+When you pull images, the downloaded layers are stored in `~/.apptainer/cache`. On HPC systems with tight home directory quotas, this can fill up quickly:
 
 ```bash
 # Check cache size
@@ -134,7 +134,7 @@ Add this to your `~/.bashrc` to make it permanent.
 
 ## Running Containers
 
-Apptainer provides three commands for running containers, each with a different use case:
+You have three main commands for running containers, depending on what you're doing:
 
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
@@ -144,7 +144,7 @@ Apptainer provides three commands for running containers, each with a different 
 
 ### exec: Run a Specific Command
 
-This is the command you will use most often:
+This is what you'll use most of the time:
 
 ```bash
 # Run samtools sort
@@ -175,7 +175,7 @@ Apptainer> which samtools
 Apptainer> exit
 ```
 
-This is invaluable for debugging — you can explore what is installed, check paths, and test commands interactively before putting them into a script.
+This is incredibly useful for debugging. You can poke around, see what's installed, check file paths, and test commands before you script them.
 
 ### run: Execute the Default Action
 
@@ -186,7 +186,7 @@ apptainer run fastqc_0.12.1.sif sample.fastq.gz
 
 ## Bind Mounts: Accessing Additional Directories
 
-By default, Apptainer mounts your home directory and current working directory. But bioinformatics data often lives elsewhere — on `/scratch`, `/project`, or a parallel filesystem like `/cluster/tufts`. Use `--bind` (or `-B`) to make additional paths available:
+By default, Apptainer gives you access to your home directory and current working directory. But your data might live on `/scratch` or `/project` or some other filesystem. Use `--bind` (or `-B`) to make those paths available inside the container:
 
 ```bash
 # Bind a single directory
@@ -218,6 +218,8 @@ HPC administrators often pre-configure commonly needed bind paths in `/etc/appta
 
 ### Passing Variables into Containers
 
+You can pass environment variables from the host into containers using the `APPTAINERENV_` prefix:
+
 ```bash
 # Set a variable inside the container
 export APPTAINERENV_THREADS=8
@@ -228,11 +230,11 @@ apptainer exec samtools_1.20.sif bash -c 'echo $THREADS'
 APPTAINERENV_MYVAR="hello" apptainer exec myimage.sif bash -c 'echo $MYVAR'
 ```
 
-The `APPTAINERENV_` prefix is stripped inside the container — `APPTAINERENV_THREADS` becomes `THREADS`.
+The `APPTAINERENV_` prefix gets stripped once the container starts, so `APPTAINERENV_THREADS` becomes just `THREADS` inside.
 
 ### Controlling Host Environment Leakage
 
-By default, Apptainer passes through the host's environment variables, which can cause unexpected behavior (e.g., `$PYTHONPATH` from a module system conflicting with the container's Python). Use `--cleanenv` to start with a clean environment:
+Apptainer passes the host's environment variables into the container by default, and this can cause problems. For example, if your cluster has Python modules loaded, the module system's `$PYTHONPATH` might conflict with the Python inside your container. Use `--cleanenv` to start with a clean slate:
 
 ```bash
 # Ignore the host environment
@@ -248,7 +250,7 @@ Use `--cleanenv` whenever you suspect host environment variables might interfere
 
 ## Building Custom Images
 
-There are two ways to build Apptainer images: from a **definition file** (the Apptainer-native approach) or by converting a **Docker image** you built elsewhere.
+You have two options when building Apptainer images: write a **definition file** (Apptainer's native format) or convert a **Docker image** you've already built.
 
 ### Option 1: Definition Files (.def)
 
@@ -329,6 +331,8 @@ download/1.20/bcftools-1.20.tar.bz2
 
 ### Building from a Definition File
 
+Building images requires either root or the `--fakeroot` flag:
+
 ```bash
 # Build requires either root or --fakeroot
 apptainer build variant_tools.sif variant_tools.def
@@ -350,6 +354,8 @@ If none of these work, pulling pre-built images from Docker Hub or Quay.io (whic
 :::
 
 ### Using Conda in a Definition File
+
+Many bioinformatics tools are packaged in Bioconda, so you can start from a Conda base image and use `mamba` to install tools:
 
 ```
 Bootstrap: docker
@@ -374,7 +380,7 @@ From: condaforge/miniforge3:latest
 
 ### Option 2: Build from a Docker Image
 
-If you already have a Docker image (or a colleague built one), converting to SIF is straightforward:
+If you've already built a Docker image (or a colleague has), converting it to SIF is easy:
 
 ```bash
 # Convert directly from a registry
@@ -389,11 +395,11 @@ apptainer build mytools.sif docker-daemon://my-variant-tools:v1.0
 apptainer build mytools.sif docker-archive://mytools.tar
 ```
 
-This is often the easiest workflow: build and test with Docker on your laptop, then convert to `.sif` for HPC.
+This workflow is really convenient: you build and test with Docker on your laptop, then convert the final image to `.sif` for HPC.
 
 ## GPU Support {#sec-gpu-support}
 
-Apptainer has native support for NVIDIA GPUs, which is essential for deep learning tasks in bioinformatics — for example, protein structure prediction with AlphaFold or neural network basecalling with Dorado.
+Apptainer has built-in GPU support for NVIDIA hardware, which you'll need for deep learning tools in bioinformatics like AlphaFold for protein structure prediction or Dorado for neural network basecalling.
 
 ```bash
 # Run with GPU access — just add --nv
@@ -405,11 +411,11 @@ apptainer exec --nv alphafold.sif python3 run_alphafold.py \
 apptainer exec --nv alphafold.sif nvidia-smi
 ```
 
-The `--nv` flag:
+The `--nv` flag does three things:
 
-- Makes `/dev/nvidia*` devices available inside the container
-- Binds the host's NVIDIA driver libraries into the container
-- Sets `LD_LIBRARY_PATH` so the container uses the host's GPU drivers
+- Exposes the `/dev/nvidia*` devices so the container can see the GPU hardware.
+- Binds the host's NVIDIA driver libraries into the container.
+- Sets `LD_LIBRARY_PATH` so the container's applications use the host's GPU drivers.
 
 ::: {.callout-note}
 ## GPU Driver Compatibility
@@ -423,7 +429,7 @@ For AMD GPUs, use `--rocm` instead of `--nv`.
 
 ## Integration with Slurm {#sec-slurm-integration}
 
-Because Apptainer containers run as regular user processes, they integrate seamlessly with Slurm. There is no special configuration — you simply call `apptainer exec` inside your job script:
+Apptainer containers run as regular user processes, so they work naturally with Slurm. There's no special setup needed — you just call `apptainer exec` inside your job script:
 
 ### Basic Slurm Job Script
 
@@ -515,7 +521,7 @@ apptainer exec --bind /scratch/$USER/data \
 
 ### Nextflow
 
-Nextflow has first-class Singularity/Apptainer support. Enable it in `nextflow.config`:
+Nextflow integrates with Singularity and Apptainer natively. Just enable it in `nextflow.config`:
 
 ```groovy
 singularity {
@@ -562,9 +568,7 @@ process ALIGN {
 }
 ```
 
-Nextflow automatically pulls Docker images and converts them to SIF files when
-Apptainer (or the legacy Singularity) container engine is enabled via
-`-profile apptainer` or `-profile singularity`.
+When you run Nextflow with `-profile apptainer` or `-profile singularity`, it automatically pulls Docker images and converts them to SIF files for you.
 
 ### Snakemake
 
@@ -590,7 +594,7 @@ snakemake --cores 8 --sdm apptainer \
 
 ## Overlay Filesystems: Writable Containers
 
-SIF images are read-only by default, but sometimes you need to write inside the container (e.g., installing additional packages for testing). Apptainer supports **overlay** filesystems:
+SIF files are read-only by default, but sometimes you want to write inside a container — maybe to test a new package or debug something. Apptainer lets you add a writable **overlay** layer on top of a read-only image:
 
 ```bash
 # Create a writable overlay image
@@ -604,7 +608,7 @@ Apptainer> pip install pysam
 # This persists in overlay.img across runs
 ```
 
-For one-off exploration, you can also build a writable **sandbox** directory:
+Alternatively, you can build a writable **sandbox** directory, which is a directory tree instead of a single SIF file:
 
 ```bash
 # Build as a sandbox (writable directory instead of SIF)
@@ -617,7 +621,11 @@ apptainer shell --writable my_sandbox/
 apptainer build my_image.sif my_sandbox/
 ```
 
+Sandboxes are useful for development and testing. Once you're happy with your changes, convert it to a SIF file for distribution.
+
 ## Inspecting Images
+
+You can look inside an image to understand how it was built:
 
 ```bash
 # Show the image metadata (labels)
@@ -635,23 +643,23 @@ apptainer run-help samtools_1.20.sif
 
 ## Best Practices for HPC Containers
 
-1. **Store SIF files in a shared project directory**, not your home directory. Home directories have small quotas; SIF files can be hundreds of megabytes to several gigabytes. A shared location like `/project/lab/containers/` also lets your entire group use the same images.
+1. **Store SIF files in a shared project directory, not your home directory.** Home quotas are small, and SIF files can be hundreds of MB to several GB. Keeping them in `/project/lab/containers/` lets your whole group reuse the same images.
 
-2. **Version your SIF files.** Name them with explicit versions: `samtools_1.20.sif`, not `samtools.sif`. When you update, keep the old version so running pipelines are not affected.
+2. **Version your SIF files explicitly.** Name them `samtools_1.20.sif`, not `samtools.sif`. When you update, keep the old version. That way, pipelines that are already running won't break.
 
-3. **Use `--cleanenv` for reproducibility.** The host environment on HPC clusters is complex — loaded modules, custom `$PATH` entries, Python virtual environments. Any of these can leak into containers and cause mysterious failures.
+3. **Use `--cleanenv` for reproducibility.** HPC cluster environments are messy — module systems, custom `$PATH` variables, Python virtual environments. These can leak into containers and cause hard-to-debug failures.
 
-4. **Pull images before submitting jobs.** Compute nodes often lack internet access. Pull on the login node and reference the local `.sif` path in your job scripts.
+4. **Pull images before submitting jobs.** Compute nodes don't have internet. Pull on the login node, then reference the local `.sif` file in your job script.
 
-5. **Redirect the cache off your home directory.** Set `APPTAINER_CACHEDIR` to a scratch or temp filesystem.
+5. **Redirect the cache away from your home directory.** Set `APPTAINER_CACHEDIR` to scratch or a temporary filesystem so you don't fill up your quota.
 
-6. **Test interactively before scripting.** Use `apptainer shell` to explore the container, verify tools are installed, and test commands before embedding them in a Slurm script.
+6. **Test interactively first.** Use `apptainer shell` to explore the container, confirm tools are there, and verify commands work before you script them.
 
-7. **Pin container versions in pipelines.** Just as with Docker tags, always use specific version tags — not `latest` — when specifying containers in Nextflow or Snakemake configurations.
+7. **Pin container versions in pipelines.** Never use `latest`. Always specify exact version tags in your Nextflow or Snakemake configurations so pipelines stay reproducible.
 
 ## Quick Reference: Singularity → Apptainer Command Mapping
 
-For users transitioning from older Singularity documentation:
+If you're moving from older Singularity documentation, here's how the commands map:
 
 | Action | Singularity (legacy) | Apptainer (current) |
 |--------|---------------------|---------------------|
@@ -664,7 +672,7 @@ For users transitioning from older Singularity documentation:
 | Config directory | `~/.singularity` | `~/.apptainer` |
 | Cache variable | `SINGULARITY_CACHEDIR` | `APPTAINER_CACHEDIR` |
 
-Both columns work on current Apptainer installations — the `singularity` command is a symlink to `apptainer`.
+Both sets of commands work on current systems because `singularity` is a symlink to `apptainer`.
 
 ## Exercises
 

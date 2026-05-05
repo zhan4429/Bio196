@@ -71,7 +71,7 @@ Now Python, Bash, and most common file types will render with color.
 
 `vim` (Vi IMproved) comes installed on virtually every Unix system and is the go-to editor for many HPC admins and senior bioinformaticians. Its learning curve is genuinely steep — but worth climbing, because `vim` keybindings also appear in `less`, `man` pages, and many other tools.
 
-The critical concept: `vim` operates in **modes**. When you first open a file, you are in **Normal mode**, where keys are commands — not characters. You must explicitly enter **Insert mode** to type text.
+The critical concept: `vim` operates in **modes**. When you first open a file, you're in **Normal mode**, where keys are commands, not characters. You must explicitly enter **Insert mode** to type text.
 
 ```bash
 vim script.sh        # open a file
@@ -100,7 +100,7 @@ The essential survival guide:
 ::: {.callout-warning}
 ## The Most Common vim Mistake
 
-New users type text in Normal mode and trigger random commands. The file fills with unexpected characters, or worse, gets deleted. If `vim` ever looks wrong, press `Esc` repeatedly until you are certain you are in Normal mode, then type `:q!` to exit without saving and start over.
+New users type text in Normal mode and trigger random commands. The file fills with unexpected characters, or worse, gets deleted. If `vim` ever looks wrong, press `Esc` repeatedly until you're sure you're in Normal mode, then type `:q!` to exit without saving and start over.
 :::
 
 ::: {.callout-note}
@@ -111,7 +111,7 @@ New users type text in Normal mode and trigger random commands. The file fills w
 
 ## Visual Studio Code: The Modern Bioinformatics Editor
 
-Visual Studio Code — usually called **VS Code** — is a free, open-source editor from Microsoft that has become the most popular coding environment across software engineering. For bioinformaticians, it offers three features that make it stand out:
+Visual Studio Code (usually called **VS Code**) is a free, open-source editor from Microsoft that's become the most popular coding environment in software engineering. For bioinformaticians, it offers three standout features:
 
 1. **Remote SSH editing**: open and edit files on an HPC cluster from your local VS Code window, as if the files were local.
 2. **Polyglot support**: excellent Python, R, Bash, YAML, and Jupyter notebook support through extensions.
@@ -119,7 +119,7 @@ Visual Studio Code — usually called **VS Code** — is a free, open-source edi
 
 ### Installation
 
-Download VS Code from [code.visualstudio.com](https://code.visualstudio.com). It is available for macOS, Linux, and Windows.
+Download VS Code from [code.visualstudio.com](https://code.visualstudio.com) for macOS, Linux, or Windows.
 
 - **macOS**: Download the `.zip`, unzip, and drag `Visual Studio Code.app` to `/Applications`.
 - **Linux (Debian/Ubuntu)**: Download the `.deb` package and run `sudo dpkg -i code_*.deb`.
@@ -135,7 +135,7 @@ code script.py              # open a single file
 
 ### The VS Code Interface
 
-When you open a project folder, you will see four main regions:
+Opening a project folder shows you four main regions:
 
 ![VS Code interface overview showing the Activity Bar (left), Explorer panel, Editor area, and integrated Terminal at the bottom.](../images/01b-vscode-interface.png){fig-align="center" width="90%"}
 
@@ -189,7 +189,7 @@ Open the Extensions panel (`Ctrl+Shift+X`), search for **"Remote - SSH"** (publi
 
 **Step 2: Configure your SSH host**
 
-If you have not already, add your server to `~/.ssh/config` on your local machine:
+If you haven't already, add your server to `~/.ssh/config` on your local machine:
 
 ```sshconfig
 Host mycluster
@@ -198,7 +198,7 @@ Host mycluster
     IdentityFile ~/.ssh/id_rsa
 ```
 
-Replace `hpc.university.edu`, `myusername`, and the key path with your actual values. If you have not set up SSH key authentication, do that first — it avoids typing your password on every reconnect:
+Replace `hpc.university.edu`, `myusername`, and the key path with your actual values. If you haven't set up SSH key authentication, do that first (it avoids typing your password on every reconnect):
 
 ```bash
 # On your local machine — generate a key pair if you don't have one
@@ -221,7 +221,7 @@ When connected via Remote-SSH, **everything runs on the server**: the integrated
 ::: {.callout-warning}
 ## SSH Key Authentication Required
 
-Remote-SSH does not work reliably with password authentication on clusters that require two-factor authentication (e.g., Duo). Set up SSH key authentication and, if your cluster requires it, configure SSH `ControlMaster` to multiplex connections:
+Remote-SSH doesn't work reliably with password authentication on clusters requiring two-factor authentication (e.g., Duo). Set up SSH key authentication and, if your cluster requires it, configure SSH `ControlMaster` to multiplex connections:
 
 ```sshconfig
 Host mycluster
@@ -233,7 +233,7 @@ Host mycluster
     ControlPersist 10m
 ```
 
-This keeps one connection alive for 10 minutes, so repeated operations (opening files, running extensions) do not each require a new authentication step.
+This keeps one connection alive for 10 minutes, so repeated operations (opening files, running extensions) don't each require a new authentication step.
 :::
 
 ### Essential Extensions for Bioinformatics
@@ -305,10 +305,7 @@ conda activate rnaseq
 
 #### Running Code Interactively
 
-VS Code supports running Python code interactively in two ways:
-
-1. **Jupyter notebooks** (`.ipynb`): Open any notebook and run cells with `Shift+Enter`.
-2. **Interactive Python in `.py` files**: Add `# %%` comment markers to any `.py` file to define "cells". Run them with `Shift+Enter` just like a notebook, but your code stays in a plain `.py` file — version-control friendly and pipeline-compatible.
+VS Code lets you run Python interactively in two ways: open Jupyter notebooks (`.ipynb`) and run cells with `Shift+Enter`, or add `# %%` comment markers to any `.py` file to define "cells" and run them the same way. The second approach keeps your code in a plain `.py` file — version-control friendly and pipeline-compatible.
 
 ```python
 # %% [markdown]
@@ -337,7 +334,7 @@ Jupyter notebooks (`.ipynb`) are powerful for exploration but can be messy in Gi
 
 ### R Workflows in VS Code
 
-The **R extension** (`REditorSupport.r`) provides syntax highlighting and code completion out of the box. For full interactive use, you need `radian`, a modern R console with multi-line editing and autocomplete:
+The **R extension** (`REditorSupport.r`) provides syntax highlighting and code completion. For full interactive use, add `radian`, a modern R console with multi-line editing and autocomplete:
 
 ```bash
 # Install radian (a better R console)
@@ -441,7 +438,7 @@ Recommended extensions that VS Code will suggest to collaborators:
 ::: {.callout-note}
 ## Commit .vscode/extensions.json, Not settings.json
 
-It is good practice to commit `.vscode/extensions.json` — it helps collaborators install the right extensions with one click. Be more cautious with `.vscode/settings.json`, as it may contain local paths (like the Python interpreter path) that differ between machines. Use a `.gitignore` entry or keep only portable settings in the committed version.
+Commit `.vscode/extensions.json` to help collaborators install the right extensions with one click. Be more cautious with `.vscode/settings.json`, as it may contain local paths (like the Python interpreter path) that differ between machines. Use a `.gitignore` entry or keep only portable settings in the committed version.
 :::
 
 ### Useful Features for Daily Work
@@ -470,8 +467,7 @@ To compare any two files, open the Command Palette and run **"File: Compare Acti
 
 The right editor depends on context, not ideology.
 
-- For a quick edit on a remote server with no graphical interface, use `nano`; use
-  `vim` if you are comfortable with it.
+- For a quick edit on a remote server with no graphical interface, use `nano`, or `vim` if you're comfortable with it.
 - For writing a Bash script directly on a server, use `nano` or `vim` in the terminal.
 - For Python analysis on an HPC cluster, use VS Code with Remote-SSH.
 - For R analysis and visualization, use VS Code with the R extension or RStudio.
@@ -483,16 +479,14 @@ The right editor depends on context, not ideology.
 ::: {.callout-tip}
 ## Pro-Tip: Learn Both Worlds
 
-Do not fall into the trap of only knowing graphical editors. HPC clusters often do not allow graphical connections. A bioinformatician who can quickly edit a SLURM script in `vim` or `nano` without panicking is far more self-sufficient than one who needs VS Code for every edit. Invest a few hours in `nano` basics and `vim` survival skills — you will use them for the rest of your career.
+Don't fall into the trap of only knowing graphical editors. Many HPC clusters don't allow graphical connections. A bioinformatician who can quickly edit a SLURM script in `vim` or `nano` without panicking is far more self-sufficient than one who needs VS Code for every edit. Invest a few hours in `nano` basics and `vim` survival skills—you'll use them for the rest of your career.
 :::
 
 ## Summary
 
 - `nano` is easy, always available, and best for quick edits on remote machines.
-- `vim` is ubiquitous, modal, and keyboard-driven. It is worth learning for remote
-  editing and server work.
-- VS Code is graphical and extensible, making it the best day-to-day editor for larger
-  bioinformatics projects.
+- `vim` is ubiquitous, modal, and keyboard-driven—worth learning for remote editing and server work.
+- VS Code is graphical and extensible, making it the best day-to-day editor for larger projects.
 - VS Code with Remote-SSH gives you a local interface while your files, terminal, and
   code execution live on the HPC cluster.
 - VS Code with the Jupyter extension supports exploratory analysis in `.py` files or

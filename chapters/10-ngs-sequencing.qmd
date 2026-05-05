@@ -1,10 +1,10 @@
 # Quality Control with FastQC
 
-Before any bioinformatics analysis begins in earnest, there is one step that should be non-negotiable: look at your data. Sequencing instruments are not infallible, library preparations go wrong in systematic ways, and samples degrade. Running a read-quality assessment tool takes minutes and can save days of analysis on data that was never going to produce reliable results.
+Before you start any real analysis, there's one non-negotiable step: look at your data. Sequencing instruments fail. Library preps go sideways. Samples degrade. A quick quality check with FastQC takes minutes, but it can save you days wrestling with garbage data.
 
-The principle is simple: **garbage in, garbage out**. If your raw sequencing data has problems — adapter contamination, low-quality bases, reads from the wrong organism — every downstream result is compromised. The worst part is that these problems often propagate silently. Your pipeline will still produce output files. You will still get variant calls, expression counts, or an assembly. They will just be wrong.
+**Garbage in, garbage out.** If your raw reads have problems — adapters, low-quality bases, contamination — everything downstream is broken. The scary part? Bad data doesn't stop your pipeline. You'll still get variant calls, expression counts, or an assembly. They'll just be wrong.
 
-**FastQC** is the standard tool for this first look. It takes a FASTQ file and produces a report of roughly a dozen quality metrics, each visualized as a pass/warn/fail indicator alongside a diagnostic plot. FastQC was written by Simon Andrews at the Babraham Institute and has been the field's default QC tool since ~2010. Knowing how to read its output fluently is one of the most immediately practical skills a bioinformatician can have.
+**FastQC** is the tool for this. It takes a FASTQ file, runs ~a dozen quality checks, and spits out a report with pass/warn/fail flags and plots. Simon Andrews at Babraham wrote it, and it's been the standard since ~2010. Learning to read it quickly is worth the time investment.
 
 This chapter focuses primarily on Illumina short-read data, which is where FastQC is most widely used and where its module thresholds are calibrated. Long-read platforms (Oxford Nanopore and PacBio HiFi) have different quality characteristics and use dedicated QC tools; they are briefly addressed at the end of the chapter.
 
@@ -23,15 +23,15 @@ By the end of this chapter, you should be able to:
 
 ## Why QC Matters at Every Stage
 
-QC is not a one-time checkbox at the beginning of your workflow. You should check quality at every major stage:
+QC is not a one-time box to check at the start. Check quality at every major step:
 
-- **Raw reads**: Are the sequences high quality? Is there adapter contamination?
-- **After trimming**: Did trimming improve quality without losing too much data?
-- **After alignment**: What fraction of reads mapped? Are there too many duplicates?
-- **After variant calling**: Are the variant statistics consistent with expectations?
-- **After assembly**: Is the assembly complete? Are conserved genes present?
+- **Raw reads**: High quality? Any adapter contamination?
+- **After trimming**: Did it work? Did you lose too much?
+- **After alignment**: How many reads mapped? Duplicates reasonable?
+- **After variant calling**: Stats match what you'd expect?
+- **After assembly**: Complete? Known genes present?
 
-The cost of skipping QC is real — wasted compute hours processing bad data, false positive results that do not replicate, and in the worst case, incorrect scientific conclusions. The good news is that QC is fast. Fifteen minutes of checking quality can save weeks of troubleshooting.
+Skip QC and you'll waste hours on garbage data. You'll get false positives that don't replicate. In the worst case, you publish wrong results. QC takes 15 minutes. Troubleshooting bad data takes weeks.
 
 ![A practical raw-read QC workflow starts with FastQC, aggregates samples with MultiQC, then uses the QC pattern to decide whether to trim/filter or continue to alignment.](../images/09-ngs-qc-workflow.png){#fig-ngs-qc-workflow fig-align="center" width="92%"}
 
@@ -84,7 +84,7 @@ fastqc -o qc_reports/ sample_R1.fastq.gz sample_R2.fastq.gz
 fastqc -t 4 -o qc_reports/ *.fastq.gz
 ```
 
-FastQC reads a random subset of reads (by default 200,000) to generate its statistics — enough to characterize quality patterns without requiring the tool to process an entire 50 Gb file. The HTML report opens in any browser.
+FastQC samples 200,000 reads by default — fast enough on huge files, enough data to see the patterns. The HTML report opens in any browser.
 
 ::: {.callout-note}
 ## Compressed Files Are Fine
@@ -94,7 +94,7 @@ FastQC handles gzipped `.fastq.gz` files natively. You do not need to decompress
 
 ## The FastQC Report: Module by Module
 
-The HTML report is organized into modules, each with a pass (✓), warning (⚠), or fail (✗) flag. These flags are calibrated for a standard whole-genome sequencing library; some modules will warn or fail for specific assay types even when the data is perfectly normal.
+The HTML report has modules, each flagged as pass, warning, or fail. These thresholds are calibrated for whole-genome DNA, so expect false warnings on RNA-seq, ChIP-seq, and other specialized assays.
 
 ::: {.callout-warning}
 ## Flags Are a Starting Point, Not a Verdict
@@ -104,19 +104,19 @@ FastQC's pass/warn/fail thresholds are calibrated for **whole-genome shotgun (WG
 
 ### Per-Base Sequence Quality
 
-This is the most important module. It plots the distribution of Phred quality scores across all read positions — position 1 at the left through the end of the read on the right. For each position, the plot shows a box-and-whisker diagram: the yellow box spans the 25th–75th percentile, the whiskers span the 10th–90th percentile, and the central red line is the median. A healthy plot shows scores staying in the green zone (Q28+) across the entire read, with only a gradual dip at the 3' end.
+The most important one. It shows Phred scores across read positions. Each position gets a box-and-whisker: yellow box = 25th–75th percentile, whiskers = 10th–90th, red line = median. You want green (Q28+) across the whole read, with just a gradual drop at the end.
 
-**What a passing result looks like:** Quality is high across most of the read — median above Q30 for the majority of positions — with a gradual decline toward the 3' end.
+**What passing looks like:** Median above Q30 for most positions, with a gradual slide toward the 3' end.
 
 ![FastQC-style per-base quality profiles. A good Illumina library stays mostly in the green zone, while a poor 3' tail drops into warning or fail ranges near the end of the read.](../images/09-ngs-qc-per-base-quality.png){#fig-ngs-qc-per-base-quality fig-align="center" width="90%"}
 
 **Common failure patterns:**
 
-- *Progressive 3' quality drop:* Universal in Illumina data to some degree. After ~100–130 bp, Phred scores often drop into the yellow (Q20–Q28) or red (< Q20) zone. This happens because **phasing errors** accumulate over cycles: clusters gradually lose sync as some molecules lag or lead by one base, degrading the signal. A warning on this module for the last 10–20 bases of a 150 bp read is normal and often acceptable; a sharp drop starting before position 80 suggests the run had problems.
+- *Progressive 3' drop:* This is normal for Illumina. Phasing errors pile up over cycles — clusters drift out of sync, one base at a time, and the signal falls apart. After ~100–130 bp you usually see yellow (Q20–Q28) or red (< Q20). A warning on the last 10–20 bases of a 150 bp read is fine. A sharp drop before position 80? Run probably had issues.
 
-- *Low quality across the entire read:* If quality is uniformly poor from the start, the sequencing run itself failed — likely a flow cell loading problem, a degraded library, or a chemistry error. This data typically should not be used.
+- *Low quality everywhere:* The run failed. Flow cell loading problem, degraded library, or chemistry glitch. Don't use it.
 
-- *Position 1–2 low quality:* Sometimes the very first bases show lower quality due to sequencing primer stabilization, and is not usually a concern in practice.
+- *Position 1–2 low:* First bases sometimes wobble while the primer settles. Not usually a concern.
 
 ::: {.callout-tip}
 ## R2 Is Always Worse Than R1
@@ -126,79 +126,69 @@ In paired-end sequencing, R2 is expected to have slightly lower quality than R1 
 
 ### Per-Tile Sequence Quality
 
-This module is specific to Illumina platforms. The flow cell is divided into tiles — small rectangular imaging regions — and this plot shows whether some tiles have systematically lower quality than others.
-
-**What a passing result looks like:** A uniform blue heatmap across all tiles.
-
-**A warning or failure** shows tiles in red or orange, indicating specific regions of the flow cell underperformed. Common causes include air bubbles, physical defects on the flow cell surface, or debris in the lane that blocked imaging for those tiles during certain cycles. A few bad tiles do not doom an entire run, but a large pattern of tile failure (stripes, regions) indicates a problematic run.
+Illumina-specific. The flow cell has tiles (little imaging regions), and this plot shows if some died. Blue heatmap = good. Red or orange = specific tiles bombed. Air bubble? Physical defect? Debris in the lane? Any of those. A few bad tiles are okay, but a stripe pattern or large swath of failures means the run had real problems.
 
 ### Per-Sequence Quality Scores
 
-This module plots the distribution of **mean Phred score per read** across all reads in the file.
+Plots the average Phred score per read across all reads.
 
-**What a passing result looks like:** A sharp, prominent peak at high quality — typically around Q35–Q38 for good Illumina data. Almost all reads cluster at high mean quality.
+**Good:** Sharp peak at high quality (Q35–Q38 for Illumina). Reads cluster tight.
 
-**Warning patterns:** A broad distribution or a secondary peak at low quality (Q10–Q20) indicates a population of low-quality reads. If the low-quality peak is dominant, the run likely had global quality problems.
+**Bad:** Broad spread or a second peak at Q10–Q20. Means you've got a chunk of garbage reads. If garbage dominates, the run failed globally.
 
 ### Per-Base Sequence Content
 
-This module plots the fraction of A, T, G, and C at each position across all reads. In a fully random library, all four bases should be present at approximately 25% each at every position.
+Plots what fraction of each base (A, T, G, C) sits at each position. Random library = ~25% each.
 
-**What a passing result looks like:** Four roughly parallel lines running at ~25% each across the full read length.
+**Good:** Four parallel lines at 25% across the whole read.
 
-**Expected failures for specific assay types:**
+**Expected to fail on RNA-seq:** The first ~10–13 bases are biased. Random hexamer priming doesn't prime randomly, so certain bases show up more. FastQC fails this for almost all RNA-seq. **Don't worry about it.**
 
-- *RNA-seq:* The first ~10–13 bases often show severe non-uniform base composition. This is a known artifact of **random hexamer priming** during reverse transcription — hexamers don't prime randomly, so the first bases are enriched for certain nucleotides. FastQC will fail this module for almost all RNA-seq datasets. **This is expected and does not indicate a problem.**
+- *Amplicon (16S, targeted):* All reads start from the same primers, so some bases are locked. FastQC fails this. Not a problem.
 
-- *Amplicon sequencing (16S, targeted panels):* All reads start from the same primer sequences, so the first N bases will show 0% for some nucleotides. FastQC fails this module; it is not a problem.
+- *ATAC-seq, ChIP-seq:* These enrich certain sequences, so composition is biased. Expected.
 
-- *ATAC-seq and ChIP-seq:* These assays enrich specific sequences, leading to non-uniform base composition. Also expected.
-
-For WGS or WES, a non-random pattern outside the first few bases that cannot be explained by the assay type warrants investigation — it may indicate adapter contamination or primer carryover.
+For WGS or WES, any weird pattern outside the first few bases is worth looking at — could be adapter or primer carryover.
 
 ### Per-Sequence GC Content
 
-This module plots the distribution of GC content per read and overlays it on the theoretical distribution expected for the organism.
+Shows the GC fraction per read, overlaid on what you'd expect for the organism.
 
-**What a passing result looks like:** A single, smooth, roughly bell-shaped peak that aligns well with the theoretical distribution.
+**Good:** Single smooth bell curve matching the theoretical GC%.
 
-**Common failure patterns:**
+**Shifted peak:** Off-center from expected. Might be contamination, PCR bias, or a batch problem.
 
-- *Shifted peak:* The distribution peaks to the left or right of the theoretical center — GC content differs from expectation. This can indicate contamination from another organism, PCR bias, or a batch effect.
+**Bimodal or weird:** Two peaks usually means contamination from another organism or adapter dimers. For RNA-seq, small bumps are normal (expressed genes aren't GC-neutral), but a clear second peak suggests cross-species contamination.
 
-- *Bimodal distribution:* A second peak or heavy asymmetry often indicates **contamination** from a second organism, or adapter dimers (short artifactual molecules with atypical GC). For RNA-seq, mild deviations from a bell curve are normal because expressed transcripts are not GC-neutral; a clearly bimodal curve, however, suggests cross-species contamination.
-
-- *Sharp spike:* A very narrow spike rather than a smooth bell suggests that a single highly abundant sequence (a specific rRNA, a viral sequence, a vector) dominates the library.
+- *Sharp spike:* Narrow needle instead of a bell. Some single sequence is dominating — could be rRNA, a virus, a vector.
 
 ![A clean GC-content distribution is usually smooth and unimodal. A secondary peak suggests contamination, adapter dimers, or another strongly enriched sequence population.](../images/09-ngs-qc-gc-content.png){#fig-ngs-qc-gc-content fig-align="center" width="88%"}
 
 ### Per-Base N Content
 
-This module plots the fraction of `N` calls at each read position.
+Shows the fraction of Ns (uncertain bases) at each position.
 
-**What a passing result looks like:** Zero N content across the entire read, or at most a tiny fraction at the very end.
+**Good:** Zero Ns, or maybe a tiny bit at the end.
 
-**Failure:** Substantial N enrichment at specific positions or across the whole read indicates that the base caller was unable to discriminate signals. A spike of Ns at a particular position can point to a tile defect or a chemistry bubble affecting that cycle.
+**Bad:** Lots of Ns means the base caller couldn't make the call. A spike at one position suggests a tile defect or a chemistry bubble in that cycle.
 
 ### Sequence Length Distribution
 
-This module histograms the distribution of read lengths.
+Shows the distribution of read lengths.
 
-**What a passing result looks like:** A single sharp peak at the expected read length (e.g., exactly 150 bp for a 2×150 bp run). After quality trimming, reads will have variable lengths and FastQC will warn on a trimmed file — this is **expected**.
+**Good:** Single sharp peak at the expected length (150 bp for a 2×150 run). After trimming, lengths spread out and FastQC warns. **That's fine.**
 
 ### Sequence Duplication Levels
 
-This module estimates the proportion of reads that appear more than once, using the first 50 bp of each read as a key across a sample of 200,000 reads.
+Estimates how many reads are duplicates, using the first 50 bp as a signature across 200,000 sampled reads.
 
-**What a passing result looks like:** Most reads are unique, with only a small fraction appearing at higher duplication levels.
+**Good:** Most reads unique, few duplicates.
 
-**Common failure patterns and their causes:**
+**High duplication in RNA-seq:** Totally normal. Highly expressed genes pour out millions of identical reads. 20–60% duplication is standard. FastQC fails this for most RNA-seq data. **Don't dedup by position alone — you'll delete signal.**
 
-- *High duplication in RNA-seq:* Expected. Highly expressed genes generate enormous numbers of nearly identical reads. RNA-seq duplication rates of 20–60% are normal for poly-A selected libraries. FastQC fails this module for most RNA-seq datasets. Do **not** deduplicate RNA-seq reads based on position alone.
+**High duplication in WGS:** Problem. Above 15–30% means low complexity (too little input, over-amplified) or PCR issues. You need to deal with it later.
 
-- *High duplication in WGS:* Problematic. Duplication rates above 15–30% suggest either very low library complexity (too little input DNA, over-amplified) or a PCR cycling problem. High duplication inflates apparent coverage and needs to be addressed computationally.
-
-- *A specific short sequence at extreme frequency:* Usually adapter dimers — two adapters ligated without an insert, producing millions of identical reads.
+**One sequence everywhere:** Probably adapter dimers — two adapters ligated together, no insert, millions of copies.
 
 ::: {.callout-warning}
 ## FastQC Duplication Estimates Are Approximate
@@ -208,11 +198,11 @@ FastQC estimates duplication from a sample of reads and uses only the first 50 b
 
 ### Overrepresented Sequences
 
-This module lists any single sequence that makes up more than 0.1% of all reads. FastQC checks flagged sequences against a database of known contaminants.
+Lists sequences that make up >0.1% of the file. FastQC checks them against a contaminant database.
 
-**What a passing result looks like:** No overrepresented sequences, or a blank table.
+**Good:** Nothing, or a blank table.
 
-**Common entries and their interpretation:**
+**Common finds:**
 
 | Identified Sequence | Interpretation |
 |---|---|
@@ -229,13 +219,13 @@ If an overrepresented sequence has no hit in FastQC's database, copy it and sear
 
 ### Adapter Content
 
-This module plots the cumulative fraction of reads containing each known Illumina adapter sequence, by read position.
+Shows how many reads contain known Illumina adapters, by position.
 
-**What a passing result looks like:** Flat lines at ~0% across all read positions.
+**Good:** Flat at ~0% everywhere.
 
-**What a failure means:** Rising adapter content after some position indicates that library inserts are shorter than the read length. When a read "runs off" the end of a short insert, it reads into the adapter on the opposite side — called **adapter read-through**. This must be trimmed before alignment.
+**Bad:** Rising line. Means reads are running past short inserts into adapter sequence. They need trimming.
 
-The position where the adapter line begins to rise tells you the approximate insert size. If adapter content starts climbing at position 60 in a 150 bp run, inserts average around 60 bp — common in small RNA-seq, ATAC-seq, and degraded samples.
+The rise point tells you insert size. Rise at position 60 in a 150 bp run? Inserts are ~60 bp. Common in small RNA, ATAC-seq, degraded samples.
 
 ![Adapter content should remain close to zero across the read. A rising curve means reads are running through short inserts into adapter sequence, and the rise point approximates insert length.](../images/09-ngs-qc-adapter-content.png){#fig-ngs-qc-adapter-content fig-align="center" width="90%"}
 
@@ -258,7 +248,7 @@ FastQC pass/warn/fail flags are not verdicts — they are starting points for in
 
 ## Aggregating Reports with MultiQC
 
-When an experiment involves tens or hundreds of samples, opening individual HTML files is not practical. **MultiQC** aggregates FastQC reports — and the outputs of many other bioinformatics tools — into a single interactive summary HTML.
+With dozens of samples, opening 50 HTML files is miserable. **MultiQC** stitches FastQC reports (and many other tools) into one summary HTML.
 
 ```bash
 # Install via conda
@@ -271,9 +261,9 @@ multiqc qc_reports/ -o multiqc_output/
 multiqc qc_reports/ fastp_reports/ -o multiqc_combined/
 ```
 
-MultiQC produces a single `multiqc_report.html` with a **General Statistics** table showing per-sample summary numbers (total reads, Q30 fraction, duplication rate, GC%), per-module heatmaps and line plots comparing all samples simultaneously, and color-coded pass/warn/fail status across every module and every sample.
+It makes one `multiqc_report.html` with a **General Statistics** table (reads, Q30%, duplication, GC per sample), heatmaps and line plots across all samples, and color-coded pass/warn/fail for each module.
 
-The power of MultiQC is in **spotting outliers**. When all samples are plotted together, a single problem sample becomes immediately visible — five samples may cluster with good quality while one drops early in the per-base quality plot. That is your problem sample.
+The best part? **Spotting outliers.** When all samples plot together, one bad one jumps out. Five samples fine, one dips early in the per-base quality plot? That's your problem.
 
 ![A MultiQC-style overview makes outliers visible across metrics. Here one sample has low Q30, very low read count, and high duplication compared with the rest of the experiment.](../images/09-ngs-qc-multiqc-outlier.png){#fig-ngs-qc-multiqc-outlier fig-align="center" width="88%"}
 
@@ -285,11 +275,11 @@ Outlier samples in a MultiQC report — a sample with half the expected reads, a
 
 ## fastp: Trimming and Filtering
 
-Once you have identified quality issues — adapter contamination, low-quality 3' tails, reads that are too short — the next step is to clean the data. **`fastp`** is the current standard for this task. It is an all-in-one tool that handles quality filtering, adapter trimming, and read preprocessing in a single pass, produces its own HTML report, and handles paired-end data correctly.
+Once you've spotted problems — adapters, bad 3' ends, short reads — you need to clean up. **`fastp`** is the standard tool. One pass: it trims adapters, filters by quality, handles paired-end reads right, and spits out an HTML report.
 
 ### What Are Adapters?
 
-**Adapters** are short synthetic DNA sequences added during library preparation. They allow DNA fragments to attach to the sequencer's flow cell. Adapters are not part of your organism's genome. If a DNA fragment is shorter than the read length, the sequencer reads past the insert and into the adapter on the other side — these adapter sequences must be removed before alignment.
+Short synthetic DNA you add during library prep so fragments stick to the flow cell. Not part of your genome. If your insert is shorter than your read, you'll read through the insert into the adapter on the far end. That stuff has to come off before alignment.
 
 ### Running fastp
 
@@ -312,7 +302,7 @@ fastp \
     --json fastp_reports/sample.json
 ```
 
-The HTML report shows before/after quality profiles, how many reads were removed and why (low quality, too short, too many Ns, adapter contamination), and which adapter sequences were detected.
+The HTML report shows before/after quality, how many reads got dropped and why, and which adapters it found.
 
 ### fastp Parameter Reference
 
@@ -334,7 +324,7 @@ The HTML report shows before/after quality profiles, how many reads were removed
 ::: {.callout-note}
 ## When NOT to Trim Aggressively
 
-Modern aligners like BWA-MEM2 and STAR can "soft-clip" low-quality bases at read ends, meaning the aligner handles them without you having to trim them first. Over-trimming loses data and can introduce length biases. For most RNA-seq and WGS workflows, light trimming with fastp defaults is sufficient — trim adapters (always), apply moderate quality filtering (Q20), and let the aligner handle the rest. Reserve aggressive trimming for data with severe quality problems.
+Modern aligners like BWA-MEM2 and STAR do soft-clipping — they leave bad bases alone without making you trim first. Over-trim and you lose data. For most RNA-seq and WGS, light trimming works fine: chop adapters (always do this), filter to Q20, and let the aligner figure out the rest. Save hard trimming for truly awful data.
 :::
 
 ### Before/After Comparison
@@ -351,11 +341,11 @@ mkdir -p multiqc_combined
 multiqc fastqc_raw/ fastqc_trimmed/ fastp_reports/ -o multiqc_combined/
 ```
 
-Check that: (1) adapter content is gone in the trimmed reads, (2) per-base quality at the 3' end has improved, and (3) read counts are reasonable — some reads will be lost during filtering, but if more than 15% were discarded, that warrants investigation.
+Check: (1) adapters are gone, (2) 3' quality improved, and (3) read count loss makes sense. Losing 15%+ of reads warrants a look.
 
 ## Is My Data Good Enough?
 
-There is no single universal threshold. What "good enough" means depends on your downstream analysis, your organism, and your experimental design. The following table gives practical benchmarks as a starting point.
+There's no magic number. It depends on what you're doing, your organism, and your experiment. Here are practical benchmarks:
 
 | Metric | Good | Acceptable | Investigate |
 |---|---|---|---|
@@ -425,7 +415,7 @@ Quality control does not end after adapter trimming. Each stage of your analysis
 
 ### Alignment QC
 
-After aligning reads to a reference genome (with BWA-MEM2, STAR, HISAT2, etc.), check alignment statistics with `samtools`.
+Once reads are aligned (BWA-MEM2, STAR, HISAT2, etc.), check alignment stats with `samtools`.
 
 ```bash
 # Basic alignment stats: mapped reads, duplicates, properly paired
@@ -480,11 +470,11 @@ For genome assembly projects, two tools provide complementary assessments:
 
 ## Quality Control for Long-Read Platforms
 
-FastQC was designed for Illumina short reads. Its modules assume reads of uniform length, similar per-base quality encoding, and cluster-based sequencing artifacts. Neither Oxford Nanopore nor PacBio HiFi data fits these assumptions.
+FastQC is built for Illumina: uniform read length, standard quality encoding, cluster artifacts. Long reads don't fit.
 
-**Oxford Nanopore (ONT):** Reads are variable-length (typically 1–50+ kb), per-base quality scores tend to be lower than Illumina (Q20 for R10.4.1 simplex, ~Q30 for duplex), and the relevant QC metrics are different: N50 read length, total yield in gigabases, pore occupancy over time, and fraction of reads passing the quality filter set during base calling. The primary QC tool is **NanoPlot** or the summary report from MinKNOW/Dorado. `seqkit stats -N 50` provides a fast command-line summary of read length statistics.
+**Oxford Nanopore:** Variable length (1–50+ kb), lower quality (Q20–Q30), different metrics: N50, yield in Gb, pore activity, pass-rate. Use **NanoPlot** or MinKNOW/Dorado reports. Quick check: `seqkit stats -N 50`.
 
-**PacBio HiFi:** HiFi reads are generated by circular consensus sequencing (CCS), which applies quality filtering during read generation. The CCS tool reports the number of passes per molecule and the fraction of reads meeting the Q20 accuracy threshold. Quality summaries are generated using `seqkit stats` or tools in the PacBio SMRTlink suite. Key metrics are mean read length (targeting 15–25 kb), mean CCS accuracy (≥Q30 for HiFi), and the number of CCS reads per SMRT cell.
+**PacBio HiFi:** Circular consensus (CCS) squeezes out Q30+ reads. Check passes per molecule and Q20+ fraction with CCS. Use `seqkit stats` or SMRTlink. Look for mean read length (15–25 kb), CCS accuracy (≥Q30), reads per cell.
 
 ```bash
 # Works for both ONT and HiFi FASTQ files

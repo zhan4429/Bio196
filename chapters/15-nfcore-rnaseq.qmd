@@ -2,9 +2,9 @@
 
 ## Why This Chapter?
 
-The previous chapter introduced nf-core as an ecosystem of community pipelines. This chapter walks through one of them end to end. The goal is not to revisit RNA-seq biology from the earlier chapter, but to show how the workflow-management ideas from the last two chapters (Nextflow processes, profiles, samplesheets, `-resume`, container engines, parameter files) come together when you actually launch a real community pipeline.
+The previous chapter introduced nf-core. Now we'll work through one pipeline end to end. We're not redoing the RNA-seq biology from earlier chapters. Instead, we're showing how all those workflow concepts — Nextflow processes, profiles, samplesheets, `-resume`, containers, parameter files — actually come together when you run a real pipeline.
 
-We use `nf-core/rnaseq` version `3.24.0` as the worked example because it is the most widely run nf-core pipeline and exercises every part of the standard run pattern: a CSV samplesheet, a container profile, a reference genome, a long list of optional parameters, and a rich MultiQC report at the end. Whatever pipeline you eventually run for your own work — `sarek`, `ampliseq`, `chipseq`, `atacseq`, `taxprofiler`, `scrnaseq` — the mechanics will look very similar.
+We're using `nf-core/rnaseq` version `3.24.0` because it's the most widely used pipeline and covers everything you'll encounter: a CSV samplesheet, a container profile, a reference genome, many optional parameters, and a MultiQC report at the end. Once you can run this, the same pattern works for `sarek`, `ampliseq`, `chipseq`, `atacseq`, `taxprofiler`, and `scrnaseq`.
 
 ::: {.callout-note}
 ## The Main Idea
@@ -26,7 +26,7 @@ By the end of this chapter you should be able to:
 
 ## What `nf-core/rnaseq` Packages
 
-At a high level, the pipeline checks inputs, runs FASTQ-level QC, optionally trims and decontaminates, performs alignment and/or pseudoalignment, builds gene- and transcript-level matrices, runs many post-alignment QC tools, and aggregates everything into one MultiQC report.
+The pipeline checks inputs, runs FASTQ-level QC, optionally trims and screens for contaminants, aligns or pseudoaligns reads, builds count matrices, runs post-alignment QC, and rolls everything into one MultiQC report.
 
 ![nf-core/rnaseq connects input files, QC, alignment or quantification, output matrices, and one consolidated MultiQC report.](../images/15-nfcore-rnaseq-overview.png){#fig-nfcore-rnaseq-overview fig-align="center" width="95%"}
 
@@ -38,7 +38,7 @@ From a workflow-management perspective, what matters is the *shape* of the pipel
 - A single MultiQC report collects QC across tools.
 - A `pipeline_info/` directory records exactly how the run was performed.
 
-The pipeline does not replace biological judgment. It will not tell you whether your experimental design makes sense or whether a surprising result is real. For the science of RNA-seq — library prep, alignment vs. pseudoalignment trade-offs, normalization, differential expression with DESeq2 — return to the RNA-seq chapter earlier in this course reader.
+The pipeline handles the computation, but it won't tell you if your experimental design is sound or if a surprising result is real. For the RNA-seq biology — library prep, alignment versus pseudoalignment, normalization, differential expression — go back to the earlier RNA-seq chapter.
 
 ## Prerequisites
 
@@ -86,7 +86,7 @@ A few rules carry over to almost every nf-core pipeline:
 
 ## Always Test First
 
-Every nf-core pipeline ships with a tiny test dataset. The test profile answers one question: *can my environment run this pipeline at all?*
+Every nf-core pipeline ships with a small test dataset. Run the test profile to answer a single question: can your environment actually run this pipeline?
 
 ```bash
 nextflow run nf-core/rnaseq \
@@ -139,7 +139,7 @@ trimmer: "fastp"
 save_reference: true
 ```
 
-A parameter file is preferable to a long command line for three reasons: it is easy to share, easy to diff in version control, and easy to attach to a methods section as the literal record of how the run was configured.
+Parameter files beat long command lines because they're easy to share, easy to version control, and they become your methods section — the exact record of what you ran.
 
 ## Container Profile Choice
 
@@ -225,7 +225,7 @@ When you do change parameters, put them in your `params.yml` — never bury them
 
 ## Reading the Outputs
 
-After the run, `results_rnaseq/` will contain many subdirectories. Do not try to read everything. From a workflow-management perspective there are three artifacts that matter most:
+The `results_rnaseq/` folder will have many subdirectories. You won't need all of them. Three artifacts matter most from a workflow perspective:
 
 ![A simple map of the most important nf-core/rnaseq output directories and which files to read first.](../images/15-nfcore-rnaseq-outputs.png){#fig-nfcore-rnaseq-outputs fig-align="center" width="95%"}
 
@@ -251,7 +251,7 @@ The biological interpretation of those matrices — picking counts vs. TPM, choo
 
 ## A Short Checklist: Did the Run Work?
 
-Before handing results to a collaborator, walk through this list. It applies to almost any nf-core run, not just RNA-seq:
+Use this checklist before sharing results. It applies to any nf-core pipeline, not just RNA-seq:
 
 1. Did the pipeline exit cleanly? Check the Nextflow stdout for `Pipeline completed successfully`.
 2. Are all expected samples present in the MultiQC general statistics table?
@@ -275,11 +275,11 @@ If all six pass, you have a clean, reproducible run that someone else can take f
 
 ## Summary
 
-`nf-core/rnaseq` is a worked example of the standard nf-core run pattern: pin the version, write a samplesheet, pick a container profile, drop your parameters in a YAML file, run the test profile first, then launch the real run with `-resume` ready to use. The MultiQC report and `pipeline_info/` directory together form the workflow artifact you keep — they document what ran, with which tool versions, on which samples, and how each task performed.
+Running `nf-core/rnaseq` follows the standard nf-core pattern. Pin the version. Write your samplesheet. Pick a container profile. Put your parameters in a YAML file. Test first, then run with `-resume` at the ready. The MultiQC report and `pipeline_info/` directory are what you keep — they show what ran, which tool versions were used, which samples were processed, and how each task performed.
 
-The same skills transfer directly to every other nf-core pipeline. Once you can run `rnaseq` cleanly, you can run `sarek`, `chipseq`, `atacseq`, `ampliseq`, `taxprofiler`, or `scrnaseq` with very small adjustments to the samplesheet and parameter file.
+These skills transfer directly to every other nf-core pipeline. Once you can run `rnaseq`, you can run `sarek`, `chipseq`, `atacseq`, `ampliseq`, `taxprofiler`, or `scrnaseq` with only tiny changes to the samplesheet and parameter file.
 
-For the biology — what the count matrices mean, how strandedness affects quantification, how to model differential expression — return to the RNA-seq chapter earlier in this course reader.
+For the RNA-seq biology — what those count matrices mean, how strandedness affects quantification, how to model differential expression — go back to the earlier RNA-seq chapter.
 
 ## Exercises
 

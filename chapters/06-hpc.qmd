@@ -2,15 +2,9 @@
 
 ## Why Use HPC?
 
-Modern bioinformatics often outgrows a laptop. A whole-genome sequencing dataset can be
-hundreds of gigabytes, RNA-seq projects commonly contain dozens of FASTQ files, and tools
-such as STAR, genome assemblers, and deep-learning models may need more memory, CPU cores,
-or GPUs than a personal computer has.
+Modern bioinformatics often outgrows a laptop. Whole-genome sequencing datasets run to hundreds of gigabytes. RNA-seq projects contain dozens of FASTQ files. Tools like STAR, genome assemblers, and deep-learning models need more memory, CPU cores, or GPUs than most personal computers have.
 
-The Tufts High-Performance Computing (HPC) cluster is the shared research computing
-system for Tufts students, staff, and researchers. It provides login nodes, compute nodes,
-shared storage, software modules, and the Slurm scheduler so many people can run large
-computing jobs without competing directly on the same machine.
+The Tufts High-Performance Computing (HPC) cluster is a shared resource for Tufts students, staff, and researchers. It gives you login nodes for access, compute nodes where work actually happens, shared storage, pre-installed software modules, and the Slurm scheduler—so many people can run large jobs simultaneously without fighting over the same machine.
 
 ::: {.callout-note}
 ## The Big Rule
@@ -52,14 +46,11 @@ The current Tufts OnDemand portal is:
 https://ondemand-prod.pax.tufts.edu
 ```
 
-This chapter focuses on the command-line route because it is what you will use most often
-for reproducible bioinformatics workflows.
+This chapter focuses on the command-line route, since it's what you'll use most for reproducible bioinformatics workflows.
 
 ## What Is SSH?
 
-**SSH** stands for Secure Shell. It is the standard way to open a secure terminal session
-on a remote computer. When you use SSH, commands you type on your laptop are sent through
-an encrypted connection to the remote server.
+**SSH** stands for Secure Shell. It's the standard way to open a secure terminal on a remote computer. Your keystrokes are encrypted in transit to the server.
 
 For Tufts HPC, the SSH login host is:
 
@@ -75,9 +66,7 @@ ssh your_utln@login-prod.pax.tufts.edu
 
 Replace `your_utln` with your Tufts username.
 
-The first time you connect, SSH may ask whether you trust the host. After that, you will
-be prompted for your Tufts password and any required 2FA step. A successful login drops
-you onto one of the Tufts HPC login nodes, with a prompt similar to:
+The first time you connect, SSH will ask whether you trust the host key. After that, you'll be prompted for your password and any 2FA step. A successful login puts you on one of the Tufts HPC login nodes, with a prompt like:
 
 ```text
 [your_utln@login-prod-01 ~]$
@@ -99,8 +88,7 @@ with Slurm first.
 
 ## What Is SFTP?
 
-**SFTP** stands for SSH File Transfer Protocol. It uses the same secure connection as SSH,
-but instead of giving you a remote shell, it gives you a small file-transfer prompt.
+**SFTP** stands for SSH File Transfer Protocol. It's the same secure connection as SSH, but gives you a file-transfer prompt instead of a shell.
 
 Start SFTP from your laptop:
 
@@ -143,9 +131,7 @@ SFTP works well for transferring a few files and for exploring what is on the cl
 
 ## Transferring Files With rsync
 
-`rsync` also uses SSH, but it is better for real project work because it can copy whole
-directories, show progress, and resume partial transfers. Run `rsync` from your laptop,
-not from inside an SSH session.
+`rsync` uses SSH too, but it's built for real project work: it copies whole directories, shows progress, and can resume partial transfers. Run it from your laptop, not inside an SSH session.
 
 Upload a local project directory to your Tufts HPC home directory:
 
@@ -190,17 +176,14 @@ rsync -avzP rnaseq_demo remote:rnaseq_demo/
 
 ## Tufts HPC Storage
 
-Tufts HPC storage is shared across the login and compute nodes. Once a file is copied to
-cluster storage, it is visible from the node where your Slurm job runs.
+Tufts HPC storage is shared across login and compute nodes. Copy a file to cluster storage once, and your job can access it from any node.
 
 | Storage area | Tufts path | Use for |
 |---|---|---|
 | Home | `/cluster/home/your_utln` | Scripts, small data, notebooks, configuration files |
 | Lab project storage | `/cluster/tufts/your_lab_name/your_utln` | Shared lab data, larger project inputs, final outputs |
 
-Tufts home directories are fixed-size and intended for modest storage. If you are working
-with a lab, use the lab project storage path for larger datasets. To check project storage
-usage:
+Tufts home directories are fixed-size, meant for modest storage. If you're working with a lab, use lab project storage for larger datasets. Check usage with:
 
 ```bash
 df -H /cluster/tufts/your_lab_name
@@ -248,8 +231,7 @@ sinfo
 
 ## Slurm: Running Work on Compute Nodes
 
-On your laptop, a command starts immediately. On a shared cluster, you request resources
-and Slurm decides where and when your job runs.
+On your laptop, a command runs right away. On a shared cluster, you request resources, then Slurm decides when and where your job starts.
 
 ![The Slurm job lifecycle: write a script with resource requests, submit it, wait in the queue, run on a compute node, then review the results.](../images/13-job-lifecycle.png){fig-align="center" width="95%"}
 
@@ -319,15 +301,13 @@ Your job output should show a compute-node hostname, not `login-prod`.
 
 ## Requesting an Interactive Session
 
-Interactive sessions are useful for testing commands before writing a full batch script.
-From a login node:
+Interactive sessions let you test commands before committing them to a script. Request one from a login node:
 
 ```bash
 srun -p batch -t 00:30:00 --ntasks=1 --cpus-per-task=2 --mem=4G --pty bash
 ```
 
-When Slurm allocates resources, your prompt changes to a compute node. Now it is safe to
-run test commands. When you are done:
+Once Slurm allocates resources, your prompt changes to a compute node. Now you can test commands safely. When you're done:
 
 ```bash
 exit
@@ -344,8 +324,7 @@ submit it with `sbatch` so it can keep running even if your SSH connection close
 
 ## Loading Software With Modules
 
-Tufts HPC uses environment modules to provide installed software. The exact software list
-changes over time, so search before loading:
+Tufts HPC uses environment modules for its installed software. The list changes, so check what's available first:
 
 ```bash
 # Search for available software
@@ -369,7 +348,7 @@ Modules are still useful because they provide cluster-supported tools and compil
 
 ## CPUs, Memory, and Time
 
-The scheduler can only allocate resources effectively if your request accurately reflects what your job needs.
+The scheduler works best when your request matches what your job actually needs.
 
 ```bash
 #SBATCH --ntasks=1
@@ -396,8 +375,7 @@ up.
 
 ## Job Arrays for Many Samples
 
-Many bioinformatics tasks repeat the same command for many samples. Slurm job arrays are
-designed for this pattern.
+Job arrays are perfect when you need to run the same command across many samples. Here's how:
 
 Create a file called `samples.txt`:
 
@@ -463,10 +441,9 @@ seff 1234567
 
 ## A Small Bioinformatics Example
 
-This example runs FastQC on paired FASTQ files in a course project directory. Adjust paths
-for your own username and data.
+Here's a realistic example: running FastQC on paired FASTQ files in a course directory. Adjust the paths for your own setup.
 
-Suggested project layout:
+Start with this directory structure:
 
 ```bash
 mkdir -p /cluster/home/$USER/bio196/rnaseq_demo/{fastq,qc,logs,scripts}
@@ -529,12 +506,11 @@ rsync -avzP \
 
 ### Running on the Login Node
 
-If the prompt says `login-prod`, stop and request a compute node. Use `sbatch` for batch
-jobs or `srun --pty bash` for interactive testing.
+If you see `login-prod` in your prompt, stop and move to a compute node. Use `sbatch` for batch jobs or `srun --pty bash` for interactive testing.
 
 ### Using the Wrong Path
 
-Use full Tufts HPC paths when transferring data:
+Always use full Tufts HPC paths in your transfer commands:
 
 ```text
 /cluster/home/your_utln
@@ -548,8 +524,7 @@ again.
 
 ### Requesting Too Much
 
-Large requests can sit in the queue longer. Start with a small test, inspect `sacct` or
-`seff`, then adjust.
+Large requests wait longer in the queue. Start small, check `sacct` or `seff`, then scale up.
 
 ### Trusting `module load tool` Forever
 

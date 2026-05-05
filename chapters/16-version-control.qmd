@@ -21,7 +21,7 @@ This informal "version control" by renaming files seems harmless at first, but i
 - **A collaborator emails their copy.** Now you have two divergent versions and no way to merge them without manually comparing every line.
 - **You break something.** An analysis that worked yesterday no longer works, and you have no idea which change caused it.
 
-**Git** solves all of these problems. It is a version control system that records every change you make to your files as a **snapshot** — a permanent, labeled checkpoint you can always return to. Think of Git as a time machine for your project: you can rewind to any previous state, see exactly what changed and when, and safely experiment without fear of losing work.
+**Git** is a version control system that records every change you make to your files as a **snapshot** — a permanent, labeled checkpoint you can always return to. With Git, you can rewind to any previous state, see exactly what changed and when, and safely experiment without fear of losing work.
 
 ::: {.callout-note}
 ## Why This Matters for Science
@@ -82,19 +82,11 @@ Use the email associated with your GitHub account. This links your commits to yo
 
 ## Understanding Git: A Mental Model
 
-Git can feel abstract at first. Here is a concrete analogy that covers the core concepts.
-
-**Think of Git as a photographer with a Polaroid camera, a photo album, and a time machine:**
-
-- Your **working directory** is the scene — the files on your disk that you are actively editing
-- The **staging area** is the arrangement on a table — you choose which items to photograph next
-- A **commit** is a snapshot — a permanent photo with a note written on the back describing what it shows
-- The **repository** is the photo album — a chronological collection of all your snapshots
-- **Branches** are alternate photo albums — you can create a separate album to try a different arrangement, and if you like it, paste those photos into the main album
+Git's workflow has three main parts. Your **working directory** is where you actively edit files on your disk. The **staging area** is where you select which changes belong together in the next commit. The **repository** is where Git stores all your snapshots — a chronological record you can return to anytime. **Branches** let you work on separate lines of development: you can create a branch to try a new approach, and merge it back into main once it's ready.
 
 ![Git has three areas: the working directory, the staging area, and the repository history. `git add` stages selected changes; `git commit` saves them as a permanent checkpoint.](../images/10-git-three-areas.png){#fig-git-three-areas fig-align="center" width="95%"}
 
-The key insight is the **staging area**. You do not commit everything at once — you deliberately choose which changes belong together in a single snapshot. This lets you make one logical commit ("Add normalization step") even if you also have unrelated edits in progress.
+The **staging area** is worth understanding well. You don't commit everything at once — you pick which changes go together. This way you can make one logical commit ("Add normalization step") even while other edits are in progress.
 
 ## Your First Repository
 
@@ -980,15 +972,15 @@ git push origin --tags           # push tags to GitHub
 
 ## Summary
 
-Git is not optional for modern bioinformatics — it is as fundamental as knowing how to use the command line. The key points:
+Mastering Git changes how you work. Here's what to take away:
 
-- **Commit early and often** with descriptive messages that explain *why*, not just *what*
-- The **staging area** lets you craft logical, focused commits from scattered changes
-- **Branches** let you experiment safely — try a new method without risking the working code
-- **.gitignore** keeps large data files out of Git — track scripts and configs, not FASTQs and BAMs
-- **GitHub** adds collaboration (pull requests, issues) and visibility (public repos, DOIs)
-- **Tag releases** for manuscript versions and **archive with Zenodo** for a citable DOI
-- **Almost everything is recoverable** — Git's reflog keeps a record of every state your project has been in
+- **Make frequent, small commits** with messages that explain *why* you made each change
+- The **staging area** lets you group related changes into focused commits even when other work is in progress
+- **Branches** keep experiments separate from your main code — you can try something risky without breaking what works
+- **.gitignore** prevents large data files from bloating the repository — version your scripts and configs, not your raw data
+- **GitHub** enables collaboration (pull requests, code review, issues) and makes your work discoverable
+- **Tag releases** to mark versions used in manuscripts, and **archive with Zenodo** to get a DOI
+- **Git never loses work** — the reflog holds every state your project has ever been in
 
 ## Exercises
 

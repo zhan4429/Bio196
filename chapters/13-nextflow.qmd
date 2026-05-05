@@ -2,9 +2,9 @@
 
 ## Why Workflow Managers?
 
-A typical RNA-seq analysis involves a dozen steps — quality control, trimming, alignment, sorting, indexing, quantification, normalization, and reporting. Strung together in a bash script, this works until it doesn't: one sample fails, and you must restart from scratch. You move to an HPC cluster and every path is different. A collaborator tries to reproduce your results and gets a different version of STAR.
+RNA-seq analysis needs a dozen steps: quality control, trimming, alignment, sorting, indexing, quantification, normalization, reporting. A bash script works fine until sample 42 crashes halfway through. Then you're stuck rerunning everything from the top. Move that same script to a cluster? Paths break. A collaborator runs it and gets a different STAR version, so results don't match.
 
-**Workflow managers** solve these problems systematically:
+Workflow managers fix all of this:
 
 | Problem with Bash Scripts | How Nextflow Solves It |
 |--------------------------|------------------------|
@@ -16,7 +16,7 @@ A typical RNA-seq analysis involves a dozen steps — quality control, trimming,
 | No provenance tracking | Execution reports, timeline, and DAG generated automatically |
 | Scaling requires rewriting | Dataflow model scales from 1 sample to thousands |
 
-**Nextflow** is one of the dominant workflow managers in genomics. This chapter focuses on the Nextflow engine itself: how processes, channels, workflows, caching, configuration, and execution profiles work. The next chapter introduces **nf-core**, a community that builds production-quality pipelines on top of Nextflow.
+**Nextflow** is one of the dominant workflow managers in genomics. This chapter covers how it actually works: processes, channels, workflows, caching, and configuration. The next chapter shows you nf-core, the community library of pipelines built on top of it.
 
 ## Installing Nextflow
 
@@ -76,17 +76,17 @@ These habits prevent most beginner mistakes:
 
 ## The Dataflow Programming Model
 
-Nextflow uses a **dataflow programming model**: you define **processes** (steps) and connect them with **channels** (data streams). Nextflow handles parallelization, scheduling, and dependencies automatically.
+Nextflow's core idea is simple: define **processes** (tasks), connect them with **channels** (data flows), and let Nextflow figure out the rest. You declare what each step does and what data it needs. Nextflow handles scheduling, parallelization, and retries automatically.
 
-The three building blocks are:
+Three pieces make this work:
 
-1. **Processes** — self-contained tasks that execute a script (shell, Python, R, etc.)
-2. **Channels** — asynchronous queues that transport data between processes
-3. **Workflows** — the wiring that connects processes via channels
+1. **Processes** — self-contained tasks (shell, Python, R, whatever you need)
+2. **Channels** — queues that pass data between processes
+3. **Workflows** — the glue that wires processes together
 
 ## Processes
 
-A process is the fundamental unit of execution. It declares its inputs, outputs, resource requirements, and the script to run:
+A process is the basic unit of work. It specifies what goes in, what comes out, how many CPUs to use, and what command to run:
 
 ```groovy
 process FASTQC {
@@ -129,7 +129,7 @@ FASTQC.out.zip    // access the zip output channel
 
 ### Process Directives
 
-Directives control how a process is executed:
+Directives tell Nextflow how to run the process: CPU count, memory, time limits, what container to use, and how to handle failures:
 
 ```groovy
 process STAR_ALIGN {
@@ -170,7 +170,7 @@ The `retry` strategy is particularly powerful when combined with dynamic resourc
 
 ## Channels
 
-Channels are the data transport layer. They connect process outputs to process inputs and enable automatic parallelization.
+Channels are how data flows between processes. They're like queues: one process writes to a channel, another reads from it. Nextflow automatically parallelizes when you have multiple items in a channel.
 
 ### Channel Factories
 
@@ -209,7 +209,7 @@ channel.fromPath('data/*.fastq.gz', checkIfExists: true)
 
 ### Key Channel Operators
 
-Operators transform, filter, and combine channels:
+Channels have built-in methods to transform, filter, and combine data. Here are the ones you'll use constantly:
 
 ```groovy
 // map: transform each element
@@ -249,7 +249,7 @@ reads_ch.branch {
 
 ## Workflows
 
-The workflow block wires processes together:
+The workflow block connects your processes. You pass data between them using the channels you created:
 
 ```groovy
 workflow {
@@ -301,7 +301,7 @@ workflow {
 
 ## Resume and Caching
 
-Nextflow's `-resume` flag is one of its most powerful features. When a pipeline fails partway through, fix the problem and re-run with `-resume` — Nextflow skips all tasks that already completed successfully and only re-runs what is needed.
+The `-resume` flag is a lifesaver. Pipeline crashes at hour 10? Fix the bug, re-run with `-resume`, and Nextflow picks up exactly where it left off. No wasted compute on steps that already finished.
 
 ![Left: the first run executes every process. Right: after fixing a bug in ALIGN and re-running with -resume, FASTQC and TRIM are skipped (cached), and only ALIGN and downstream steps are re-run.](../images/14-nextflow-resume.png){fig-align="center" width="92%"}
 
@@ -313,7 +313,7 @@ nextflow run main.nf -profile apptainer
 nextflow run main.nf -profile apptainer -resume
 ```
 
-**How caching works**: Each task gets a unique hash based on its inputs, script, container, and environment. If nothing changed, the cached result is reused. The `work/` directory stores all intermediate results.
+Here's how it works: each task gets a hash based on its inputs, script, container, and environment. If the hash matches something already in the `work/` directory, Nextflow reuses it. Otherwise, it runs the task fresh.
 
 ::: {.callout-warning}
 ## Clean Up the Work Directory
@@ -333,11 +333,11 @@ nextflow clean -f -before last
 
 ## Configuration
 
-Nextflow separates pipeline logic from execution settings through configuration files. This is what makes the same pipeline portable across laptop, HPC, and cloud.
+Configuration files separate your pipeline from how it runs. Write the pipeline once, configure it for laptop, cluster, or cloud. Same code everywhere.
 
 ### The `nextflow.config` File
 
-Use `nextflow.config` for execution settings: containers, executors, queues, default resources, and profiles. Use a separate YAML or JSON file with `-params-file` for project-specific analysis parameters such as sample sheets, genomes, and output directories.
+Put execution settings (containers, executors, queues, resource defaults) in `nextflow.config`. Put project parameters (sample sheets, genomes, output paths) in a separate YAML file and pass it with `-params-file`. This keeps things readable and reusable.
 
 ```groovy
 // Parameters
@@ -397,7 +397,7 @@ dag.enabled      = true
 
 ### Process Selectors
 
-Override resources for specific processes using labels or names:
+Want to give more memory to one process? Use selectors to customize resources for specific processes by name or label:
 
 ```groovy
 process {
@@ -418,7 +418,7 @@ process {
 }
 ```
 
-For any reusable pipeline, prefer a parameter file like this:
+For any pipeline you'll share or reuse, put parameters in a YAML file:
 
 ```yaml
 input: "samplesheet.csv"
@@ -436,11 +436,11 @@ nextflow run main.nf \
   -params-file params.yml
 ```
 
-This separation is easier to teach, easier to review, and safer to reuse.
+This makes the pipeline easier to understand, review, and share with others.
 
 ### HPC Configuration (Slurm + Apptainer or Singularity)
 
-A complete configuration for running Nextflow on a Slurm HPC cluster:
+Here's a working configuration for Slurm clusters. Copy it and adjust the queue names and resource limits for your system:
 
 ```groovy
 // nextflow.config for HPC
@@ -504,7 +504,7 @@ export NXF_SINGULARITY_CACHEDIR=/project/mylab/singularity_cache
 
 ### Running with Profiles
 
-Profiles are combined at the command line:
+Profiles stack at the command line. Run locally with Docker, on the cluster with Singularity, or on test data:
 
 ```bash
 # Local machine with Docker
@@ -518,11 +518,11 @@ nextflow run main.nf -profile singularity,slurm
 nextflow run main.nf -profile test,docker
 ```
 
-Profile order matters. Later profiles can override settings from earlier profiles. For example, `-profile test,docker` applies the test data and then enables Docker.
+Order matters: later profiles override earlier ones. So `-profile test,docker` sets test data first, then enables Docker.
 
 ## Writing a Custom Pipeline
 
-When no existing pipeline matches your needs, you can write your own. Here is a minimal but complete custom pipeline:
+Build your own pipeline when nothing off-the-shelf fits. Here's a complete, minimal example:
 
 **Project structure:**
 ```
@@ -697,7 +697,7 @@ nextflow run main.nf -profile apptainer,slurm -resume
 
 ## Groovy Essentials for Nextflow
 
-Nextflow uses Groovy syntax. You do not need to learn Groovy in depth — just a few patterns:
+Nextflow runs on Groovy. You don't need to be a Groovy expert — just learn these patterns:
 
 ### String Interpolation
 
@@ -721,7 +721,7 @@ bwa mem -t $task.cpus ${genome} ${reads}
 
 ### Closures
 
-Closures are anonymous functions — the core of channel operations:
+Closures are anonymous functions. They're everywhere in channel operations:
 
 ```groovy
 // Explicit parameter
@@ -746,7 +746,7 @@ def genome = params.genome ?: 'GRCh38'
 
 ## Monitoring with Seqera Platform
 
-Seqera Platform (formerly Nextflow Tower) provides a web interface for monitoring pipeline runs in real time. It tracks task status, resource usage, and costs.
+Seqera Platform gives you a dashboard for pipeline runs. Watch tasks in real time, see resource usage and costs, and monitor runs across multiple machines.
 
 ```bash
 # Enable monitoring (requires a free account at cloud.seqera.io)
@@ -756,7 +756,7 @@ nextflow run main.nf \
     -with-tower
 ```
 
-The free tier is sufficient for individual researchers. For HPC centers, Seqera offers enterprise deployment.
+The free tier works fine for individual use. Organizations can deploy it on their own servers.
 
 ## Quick Reference
 
@@ -805,13 +805,13 @@ nextflow run main.nf --input samplesheet.csv --outdir results --genome GRCh38
 
 ## Summary
 
-Nextflow provides the execution engine for reproducible bioinformatics:
+Nextflow is the engine that makes reproducible bioinformatics practical:
 
-- **Nextflow** handles parallelization, caching, container integration, and portability across laptop, HPC, and cloud
-- **`-resume`** is transformative — fix a bug and re-run without losing hours of completed work
-- Always **test first** with a small dataset or a `test` profile
-- **Profiles** separate pipeline logic from execution environment -- the same pipeline runs unchanged on Docker, Apptainer/Singularity, Slurm, or AWS
-- For custom needs, write your own pipeline using the **process-channel-workflow** model
+- It handles parallelization, caching, containers, and moving between laptop, cluster, and cloud without rewriting.
+- `-resume` saves you hours: fix a bug and pick up where you left off.
+- Test on a small dataset before going big. Every pipeline should have a `test` profile.
+- Profiles let you write once and run anywhere. Same code on Docker locally, Singularity on the cluster, or AWS in the cloud.
+- When you need custom work, the process-channel-workflow model is simple enough to learn quickly.
 
 ## Further Reading
 

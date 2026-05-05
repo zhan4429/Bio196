@@ -15,25 +15,25 @@ This chapter focuses on bulk RNA-seq. Single-cell RNA-seq, spatial transcriptomi
 
 ## The Big Picture
 
-RNA-seq measures fragments sampled from RNA molecules. The computational problem is to turn those fragments into a table where rows are genes or transcripts, columns are samples, and values represent expression evidence.
+RNA-seq breaks RNA into fragments, sequences them, and you get raw reads. Your job is to turn those reads into a table: rows = genes or transcripts, columns = samples, values = expression counts.
 
-A typical bulk RNA-seq analysis has two connected halves:
+Real RNA-seq analyses have two parts:
 
-1. **Quantification**: FASTQ reads become a count matrix.
-2. **Statistical analysis**: the count matrix and sample metadata become differential expression results.
+1. **Quantification**: reads become counts.
+2. **Statistics**: counts become biology.
 
-The two most common quantification strategies are:
+Two main paths to quantification:
 
 | Strategy | Main idea | Typical tools | Best for |
 |---|---|---|---|
 | Genome alignment | Align reads to the genome, then count overlaps with annotated genes or exons. | STAR, HISAT2, featureCounts, HTSeq | Inspectable alignments, novel junction checks, organisms with good genome annotations |
 | Transcriptome quantification | Assign reads directly to known transcripts and estimate transcript abundance. | Salmon, kallisto, tximport | Fast routine quantification, transcript-aware gene summaries |
 
-Both strategies are legitimate choices. Alignment gives you a BAM file that can be opened in IGV and interrogated when something looks suspicious. Salmon and kallisto are fast and model transcript ambiguity directly, but their results depend strongly on the completeness and correctness of the transcriptome reference.
+Both work. Alignment gives you BAM files to eyeball in IGV when something smells wrong. Salmon and kallisto are fast and handle isoforms natively, but they depend hard on your reference being right.
 
 ### Choosing an Aligner
 
-Not all aligners are appropriate for RNA-seq. The critical difference is **splice awareness** — RNA-seq reads frequently span exon-exon junctions, and a splice-aware aligner can split a single read across two exons separated by an intron.
+Different aligners for different jobs. For RNA-seq, the deal-breaker is **splice awareness** — reads jump exon junctions. You need an aligner that splits reads across introns.
 
 | Aligner | Splice-Aware? | Best For | Memory | Speed |
 |---------|:------------:|----------|--------|-------|
@@ -50,10 +50,10 @@ Bowtie2 is a general-purpose short-read aligner — it does **not** handle splic
 Bowtie2 *is* appropriate for aligning RNA-seq reads against a **transcriptome** (pre-spliced transcript sequences), or for non-spliced applications like ChIP-seq, ATAC-seq, and whole-genome sequencing.
 :::
 
-**When to choose STAR vs. HISAT2:**
+**STAR vs. HISAT2:**
 
-- **STAR**: the most widely used RNA-seq aligner. Produces high-quality splice junction detection, supports chimeric alignment for fusion gene detection, and can count reads per gene during alignment (`--quantMode GeneCounts`). Requires ~30 GB RAM for the human genome index. Preferred for most production RNA-seq pipelines (including nf-core/rnaseq).
-- **HISAT2**: uses a hierarchical indexing scheme that requires only ~8 GB RAM for the human genome. Ideal for systems with limited memory, or for organisms with very large genomes. Slightly faster than STAR in some benchmarks, but junction detection may be less sensitive for rare splice events.
+- **STAR**: Most popular. Finds splice junctions well, detects fusions, counts during alignment. Needs ~30 GB RAM for human. Standard in nf-core pipelines.
+- **HISAT2**: Memory-efficient — ~8 GB for human. Good on laptops and big genomes. A bit faster sometimes, maybe slightly less sensitive on rare junctions.
 
 ![A bulk RNA-seq analysis turns reads and metadata into a count matrix, then into statistical results and biological interpretation.](../images/09-rnaseq-pipeline-overview.png){#fig-rnaseq-pipeline-overview fig-align="center" width="95%"}
 
@@ -65,7 +65,7 @@ For a teaching project, run both at least once. Use Salmon for the fast routine 
 
 ## Project Layout
 
-Do not run RNA-seq in your home directory. Create a project directory with predictable subdirectories:
+Don't run RNA-seq in your home directory. Use a real project structure:
 
 ```bash
 rnaseq-project/
@@ -87,7 +87,7 @@ rnaseq-project/
 `-- envs/
 ```
 
-Keep raw data read-only. Put scripts under version control. Write results into `results/` rather than mixing outputs into `data/`.
+Keep raw data locked down. Version your scripts. Put everything new in `results/`, not cluttered in `data/`.
 
 A minimal paired-end sample sheet might look like this:
 
@@ -99,9 +99,9 @@ trt_1,treatment,A,reverse,fastq/trt_1_R1.fastq.gz,fastq/trt_1_R2.fastq.gz
 trt_2,treatment,B,reverse,fastq/trt_2_R1.fastq.gz,fastq/trt_2_R2.fastq.gz
 ```
 
-The `sample` values should exactly match count matrix column names later. The `condition` column records the biological comparison. The `batch` column records a known technical grouping that may need to be included in the statistical design. The `strandedness` column should be one of `unstranded`, `forward`, `reverse`, or `auto` when you are using pipelines such as `nf-core/rnaseq`.
+Sample names must match your count matrix later. `condition` is the biological variable. `batch` is a known technical grouping (use in the design if needed). `strandedness` is one of `unstranded`, `forward`, `reverse`, or `auto` for nf-core pipelines.
 
-If the same biological sample was run across multiple sequencing lanes, record multiple rows with the same `sample` value. These are technical runs, not biological replicates, and production pipelines usually concatenate them before downstream analysis.
+Same sample run across multiple lanes? Multiple rows, same name. Those are technical replicates, not biological ones — pipelines concatenate them anyway.
 
 ::: {.callout-warning}
 ## Metadata Is Part of the Data
@@ -154,13 +154,13 @@ conda env export --from-history > envs/rnaseq.yml
 
 ## Three Files, Three Questions
 
-Most RNA-seq confusion comes from mixing up the roles of the reference, reads, and metadata. A good analysis starts by asking one question of each:
+RNA-seq goes wrong when you mix up the reference, reads, and metadata. Each has its own question:
 
 ![The three inputs to RNA-seq answer different questions and fail in different ways.](../images/09-rnaseq-three-inputs.png){#fig-rnaseq-three-inputs fig-align="center" width="85%"}
 
 ## Understand the Reference
 
-Before touching the reads, inspect the reference. RNA-seq analysis is mostly a matching exercise, so mismatched chromosome names, transcript IDs, gene IDs, or annotation versions can quietly poison everything downstream.
+Before you look at any reads, check the reference. RNA-seq is a matching game. Wrong chromosome names, mismatched gene IDs, version skew — any of that breaks everything downstream silently.
 
 Common reference files:
 
@@ -187,11 +187,11 @@ For a GTF file, check which attributes are available:
 grep -v '^#' refs/genes.gtf | head -1
 ```
 
-You usually need `gene_id`, often `gene_name`, and sometimes `transcript_id`. If the file only contains CDS records, it is not a complete transcript annotation for gene-level RNA-seq.
+You'll need `gene_id`, usually `gene_name`, sometimes `transcript_id`. If the GTF is only CDS, it's incomplete for gene-level work.
 
 ## Understand the Reads
 
-Start with file names, read counts, and basic FASTQ structure:
+First step: file names, read counts, basic FASTQ structure:
 
 ```bash
 ls -lh data/raw_fastq/
@@ -226,7 +226,7 @@ In the MultiQC report, look for:
 
 ![A compact QC decision tree for common RNA-seq problems found in a MultiQC report.](../images/09-rnaseq-qc-decision-tree.png){#fig-rnaseq-qc-decision-tree fig-align="center" width="85%"}
 
-Trimming is not always mandatory, but if adapter content is high, use `fastp` or Trim Galore. Example with `fastp`:
+Trimming isn't required unless adapters are bad. If they are, use `fastp` or Trim Galore. Here's `fastp`:
 
 ```bash
 mkdir -p results/trimmed
@@ -243,7 +243,7 @@ fastp \
 
 ## Route A: Transcriptome Quantification with Salmon
 
-Salmon estimates transcript abundance from reads using a transcriptome index [@patro2017salmon]. It is fast enough for interactive learning and large enough projects.
+Salmon estimates isoform abundance from reads [@patro2017salmon]. Fast. Works for learning and real projects both.
 
 Build an index:
 
@@ -289,7 +289,7 @@ Important columns in `quant.sf`:
 | `TPM` | Transcripts per million |
 | `NumReads` | Estimated number of reads assigned to the transcript |
 
-For differential expression with DESeq2, do not analyze TPM directly. Use `tximport` to import transcript-level estimates and summarize them to gene-level counts [@soneson2015tximport].
+For DESeq2, don't use TPM straight up. Use `tximport` to handle isoforms and roll up to genes [@soneson2015tximport].
 
 Create a transcript-to-gene table from a GTF file in R:
 
@@ -328,7 +328,7 @@ txi <- tximport(
 )
 ```
 
-The resulting `txi` object contains abundance, count, and effective-length matrices. The preferred DESeq2 handoff is to pass the whole `txi` object into `DESeqDataSetFromTximport()`, which creates the appropriate offset for gene-level analysis. An acceptable alternative is to import with `countsFromAbundance = "lengthScaledTPM"` and then use `txi$counts` like a regular count matrix. Do not pass summed transcript counts to DESeq2 without either an offset or a `countsFromAbundance` correction.
+The `txi` object has abundance, counts, and lengths. Best: pass the whole object to `DESeqDataSetFromTximport()` for proper offsets. Acceptable: import with `countsFromAbundance = "lengthScaledTPM"` and use `txi$counts` as a matrix. Don't hand raw summed counts to DESeq2 without offsets.
 
 ::: {.callout-note}
 ## Counts, TPM, and Normalized Counts
@@ -338,7 +338,7 @@ Raw counts are for statistical testing. TPM is for comparing relative abundance 
 
 ### Transcriptome Quantification with kallisto
 
-**kallisto** is an alternative to Salmon that uses a pseudoalignment approach based on k-mer hashing [@bray2016near]. It is extremely fast and produces transcript-level abundance estimates that can be imported with `tximport` in the same way as Salmon.
+**kallisto** is an alternative using k-mer matching instead of full alignment [@bray2016near]. Faster than Salmon. Outputs feed `tximport` the same way.
 
 #### Build a kallisto Index
 
@@ -400,23 +400,22 @@ The `txi_kallisto` object feeds into `DESeqDataSetFromTximport()` identically to
 
 | Feature | Salmon | kallisto |
 |---------|--------|---------|
-| Algorithm | Quasi-mapping + EM | Pseudoalignment + EM |
-| Bias correction | GC bias, positional bias, fragment-length bias | None built-in |
-| Decoy-aware index | Yes (recommended for production) | No |
-| Selective alignment mode | Yes (improves accuracy) | No |
+| Algorithm | Quasi-mapping + EM | K-mer hashing + EM |
+| Bias correction | GC, position, fragment length | None |
+| Decoy-aware | Yes | No |
 | Speed | Very fast | Slightly faster |
-| Downstream tools | tximport → DESeq2/edgeR | tximport → DESeq2/edgeR; also sleuth |
-| Bootstrap support | Yes | Yes |
+| Downstream | tximport → DESeq2/edgeR | tximport → DESeq2/edgeR; sleuth |
+| Bootstrap | Yes | Yes |
+
+**Salmon** for production — better at extreme GC and bias correction. **kallisto** for quick exploration and sleuth. Both fine for most data.
 
 ::: {.callout-tip}
-## Practical Recommendation
-
-**Salmon** is the safer default for production RNA-seq because its bias correction models improve accuracy, especially for genes with extreme GC content. **kallisto** is excellent for quick exploratory analyses and integrates natively with **sleuth** for transcript-level differential expression. Both produce comparable results for most datasets.
+Both tools work well. Salmon's bias models help extreme cases.
 :::
 
 ## Route B: Genome Alignment and Feature Counting
 
-Genome alignment is slower, but it produces alignments you can inspect. Use splice-aware aligners for RNA-seq. STAR is fast and widely used [@dobin2013star]; HISAT2 is memory efficient [@kim2019hisat2].
+Alignment takes longer, but you get BAM files to inspect. Use splice-aware aligners. STAR is standard [@dobin2013star]; HISAT2 saves RAM [@kim2019hisat2].
 
 ![Two common RNA-seq quantification routes produce a gene-level count matrix through different intermediate files.](../images/09-rnaseq-quantification-routes.png){#fig-rnaseq-quantification-routes fig-align="center" width="95%"}
 
@@ -468,7 +467,7 @@ hisat2-build \
   refs/hisat2_index/genome
 ```
 
-For splice-aware alignment, you can optionally extract known splice sites and exons from the GTF to improve junction detection:
+You can extract splice sites and exons from the GTF to boost junction finding:
 
 ```bash
 # Extract splice sites and exons from GTF
@@ -506,9 +505,9 @@ Key flags:
 
 | Flag | Purpose |
 |------|---------|
-| `--dta` | Downstream transcriptome assembly mode — produces alignments better suited for transcript assemblers (StringTie) and counting tools |
-| `-p 8` | Use 8 threads |
-| `--rna-strandness RF` | For reverse-stranded libraries (dUTP protocol). Use `FR` for forward-stranded. Omit for unstranded. |
+| `--dta` | Downstream transcriptome assembly mode — better for StringTie and counters |
+| `-p 8` | 8 threads |
+| `--rna-strandness RF` | Reverse-stranded (dUTP). `FR` for forward, omit for unstranded. |
 
 Check the alignment summary in the log file:
 
@@ -540,7 +539,7 @@ Open a few BAM files in IGV with the genome and annotation. Ask:
 
 ### Count Reads with featureCounts
 
-`featureCounts` is part of the Subread package and is a fast gene-counting tool [@liao2014featurecounts].
+Part of Subread, fast gene counter [@liao2014featurecounts].
 
 ```bash
 mkdir -p results/counts
@@ -572,7 +571,7 @@ Key options:
 | `-t exon` | Count reads overlapping exon records |
 | `-g gene_id` | Group exons by gene ID |
 
-Strandedness matters. Counting reverse-stranded data as unstranded blurs antisense signal; counting unstranded data as stranded can discard half your reads.
+Strandedness is critical. Wrong strand = lost signal or discarded data.
 
 Convert featureCounts output into a simple matrix:
 
@@ -596,7 +595,7 @@ write_csv(counts, "results/counts/counts_matrix.csv")
 
 ## Differential Expression with DESeq2
 
-DESeq2 models count data with a negative binomial model, estimates size factors and dispersion, and reports log2 fold changes and adjusted p-values [@love2014deseq2].
+DESeq2 fits negative binomial distributions, estimates size factors and dispersion, reports log2 fold changes and adjusted p-values [@love2014deseq2].
 
 Start from either:
 
@@ -660,7 +659,7 @@ write_csv(res_tbl, "results/deseq2/treatment_vs_control.csv")
 summary(res)
 ```
 
-The design formula `~ batch + condition` means: estimate and control for batch first, then test condition. Do not include batch if it is perfectly confounded with condition. For example, if every control was sequenced in batch A and every treatment in batch B, the model cannot separate biology from batch.
+Formula `~ batch + condition` means: account for batch, then test condition. Don't include batch if it's perfectly confounded with condition. All controls in batch A, all treatments in batch B? The model can't tell them apart.
 
 ### DESeq2 from Salmon and tximport
 
@@ -693,26 +692,26 @@ The coefficient name in `lfcShrink()` must match your model. Run `resultsNames(d
 
 ## Interpreting DESeq2 Output
 
-The most important DESeq2 result columns are:
+Key columns:
 
 | Column | Meaning |
 |---|---|
-| `baseMean` | Average normalized expression across all samples |
-| `log2FoldChange` | Estimated log2 change for the contrast |
-| `lfcSE` | Standard error of the log2 fold change |
+| `baseMean` | Average normalized expression |
+| `log2FoldChange` | Estimated effect size |
+| `lfcSE` | Standard error |
 | `stat` | Wald test statistic |
-| `pvalue` | Unadjusted p-value |
-| `padj` | Multiple-testing adjusted p-value |
+| `pvalue` | Raw p-value |
+| `padj` | Adjusted p-value |
 
-If the contrast is `treatment` versus `control`, a positive `log2FoldChange` means higher expression in treatment. A negative value means lower expression in treatment.
+Positive `log2FoldChange` = higher in treatment. Negative = lower.
 
-Common thresholds are `padj < 0.05` and `abs(log2FoldChange) > 1`, but thresholds are not laws of nature. A gene with `padj = 0.049` is not magically different from one with `padj = 0.051`. Always inspect effect size, expression level, replicate behavior, and biological context.
+People use `padj < 0.05` and `abs(log2FoldChange) > 1`, but these aren't magic cutoffs. A gene with `padj = 0.049` is not fundamentally different from one at `padj = 0.051`. Look at effect size, expression level, replicates, and biology.
 
 ![DESeq2 separates exploratory visualization from formal testing; transformed counts are for QC, while the negative-binomial model uses counts.](../images/09-rnaseq-deseq2-flow.png){#fig-rnaseq-deseq2-flow fig-align="center" width="90%"}
 
 ## Alternative: Differential Expression with edgeR {#sec-edger}
 
-**edgeR** is another widely used Bioconductor package for differential expression analysis. Like DESeq2, it models count data with the negative binomial distribution, but it uses a different approach to dispersion estimation and testing.
+**edgeR** is another Bioconductor tool for differential expression. Also negative binomial, different dispersion and testing approach.
 
 ### When to Use edgeR vs. DESeq2
 
@@ -726,7 +725,7 @@ Common thresholds are `padj < 0.05` and `abs(log2FoldChange) > 1`, but threshold
 | Best for | General use, beginners, small samples | Complex designs, large datasets, experienced users |
 | Strengths | Excellent defaults, simple interface | Flexible GLM framework, TREAT method |
 
-In practice, DESeq2 and edgeR agree on the vast majority of genes. Differences typically occur for borderline genes near the significance threshold. For important findings, running both and checking agreement is good practice.
+In practice they agree on most genes. Borderline genes might differ. For important findings, run both and check agreement.
 
 ### edgeR Workflow
 
@@ -848,36 +847,23 @@ cat("DESeq2 only:", deseq2_only, "\n")
 cat("edgeR only:", edger_only, "\n")
 ```
 
+Pick one as primary, report it in methods. Mention the other as a sanity check. Don't cherry-pick genes from the one with better p-values — that's p-hacking.
+
+**DESeq2** for beginners — solid defaults and good docs. **edgeR** for complex designs — more flexible GLM framework.
+
 ::: {.callout-tip}
-## Pro-Tip: Which Tool to Report?
-
-Pick one tool as your primary analysis and report it in the methods section. Mention the other as a concordance check. Do not cherry-pick genes from whichever tool gives the lower p-value — that inflates your false discovery rate.
-
-For beginners, **DESeq2** is recommended because its default settings are well-calibrated and the documentation is extensive. For experienced analysts with complex experimental designs (e.g., multi-factor, interaction terms, repeated measures), **edgeR's** quasi-likelihood framework offers more flexibility.
+One tool wins. Both are defensible.
 :::
 
 ## Quality Control in R
 
 ### Library Size
 
-```r
-library(ggplot2)
-
-libsize <- data.frame(
-  sample = colnames(dds),
-  reads = colSums(counts(dds))
-)
-
-ggplot(libsize, aes(x = sample, y = reads)) +
-  geom_col() +
-  coord_flip() +
-  theme_bw() +
-  labs(x = NULL, y = "Assigned reads")
-```
+Plot total reads per sample. Makes outliers obvious.
 
 ### PCA
 
-Use transformed counts for PCA, clustering, and heatmaps. Do not use transformed counts for DESeq2 testing.
+Use variance-stabilized counts for visualization. Never use them for testing — DESeq2 tests raw counts.
 
 ```r
 vsd <- vst(dds, blind = FALSE)
@@ -887,158 +873,37 @@ plotPCA(vsd, intgroup = c("condition", "batch"))
 
 ![A PCA plot made with ggplot2 from transformed RNA-seq counts. In a healthy experiment, biological replicates should usually be close together, and the main separation should match the experimental question.](../images/09-rnaseq-ggplot-pca.png){#fig-rnaseq-ggplot-pca fig-align="center" width="90%"}
 
-If samples separate by batch more strongly than condition, stop and investigate. Batch effects are not solved by hiding them in the plot.
+If batch separates samples more than condition, you have a problem. Don't hide it.
 
 ### Sample Distance Heatmap
 
-```r
-library(pheatmap)
-
-sample_dists <- dist(t(assay(vsd)))
-sample_dist_mat <- as.matrix(sample_dists)
-rownames(sample_dist_mat) <- colnames(vsd)
-colnames(sample_dist_mat) <- colnames(vsd)
-
-pheatmap(
-  sample_dist_mat,
-  clustering_distance_rows = sample_dists,
-  clustering_distance_cols = sample_dists
-)
-```
-
-![A ggplot2 sample-distance heatmap. Small distances indicate similar expression profiles; one sample far from all others may be an outlier or mislabeled sample.](../images/09-rnaseq-ggplot-sample-distance.png){#fig-rnaseq-ggplot-sample-distance fig-align="center" width="82%"}
-
-Replicates should usually cluster together. If one sample is far from every other sample, check its FastQC report, mapping rate, assigned-read percentage, metadata, and known experimental notes.
+Plot sample-to-sample distances. Replicates should cluster. One sample isolated? Check its FastQC, mapping, assigns, metadata, lab notes.
 
 ## Visualization of Differential Expression
 
 ### MA Plot
 
-```r
-plotMA(res, ylim = c(-5, 5))
-```
-
-An MA plot shows log2 fold change against average expression. Low-count genes naturally have noisier fold-change estimates. Shrinkage helps keep these estimates from dominating the plot.
+Shows fold change vs. expression level. Low-count genes have noisier estimates. Shrinkage keeps them from dominating.
 
 ### Volcano Plot
 
-```r
-library(ggplot2)
-library(dplyr)
-
-res_tbl <- res_tbl |>
-  mutate(
-    significant = padj < 0.05 & abs(log2FoldChange) > 1
-  )
-
-ggplot(res_tbl, aes(x = log2FoldChange,
-  y = -log10(pvalue), color = significant)) +
-  geom_point(alpha = 0.55, size = 1.2, na.rm = TRUE) +
-  scale_color_manual(values = c("grey70", "firebrick")) +
-  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
-  theme_bw() +
-  labs(
-    x = "log2 fold change",
-    y = "-log10 p-value",
-    color = "Significant"
-  )
-```
+Fold change vs. p-value. Genes in top corners have big effects and strong signal. Remember to use adjusted p-values.
 
 ![A volcano plot made with ggplot2. Genes in the upper left and upper right combine large fold changes with small p-values, but final interpretation should use adjusted p-values and biological context.](../images/09-rnaseq-ggplot-volcano.png){#fig-rnaseq-ggplot-volcano fig-align="center" width="90%"}
 
 ### Heatmap of Top Genes
 
-```r
-top_genes <- res_tbl |>
-  filter(!is.na(padj)) |>
-  slice_min(padj, n = 50) |>
-  pull(gene_id)
-
-mat <- assay(vsd)[top_genes, ]
-mat <- mat - rowMeans(mat)
-
-pheatmap(
-  mat,
-  annotation_col = as.data.frame(colData(vsd)[, c("condition", "batch")]),
-  show_rownames = FALSE
-)
-```
-
-Heatmaps are useful for checking whether the reported genes behave consistently across replicates. They are not proof by themselves; they are a diagnostic view of the normalized expression matrix.
+Plot top genes in a heatmap. Check if reported genes behave consistently in replicates. It's a diagnostic, not proof.
 
 ## Gene Annotation
 
-Many results are easier to interpret with gene symbols, descriptions, or Entrez IDs. For human data:
-
-```r
-library(AnnotationDbi)
-library(org.Hs.eg.db)
-
-res_tbl$symbol <- mapIds(
-  org.Hs.eg.db,
-  keys = res_tbl$gene_id,
-  keytype = "ENSEMBL",
-  column = "SYMBOL",
-  multiVals = "first"
-)
-
-res_tbl$entrez <- mapIds(
-  org.Hs.eg.db,
-  keys = res_tbl$gene_id,
-  keytype = "ENSEMBL",
-  column = "ENTREZID",
-  multiVals = "first"
-)
-```
-
-Always confirm the ID type. Ensembl gene IDs, Ensembl transcript IDs, Entrez IDs, and gene symbols are not interchangeable.
+Map gene IDs to symbols and Entrez IDs to make results readable. Always confirm ID types — Ensembl, Entrez, and symbols are not the same.
 
 ## Functional Enrichment
 
-Once you have a list of genes, enrichment analysis asks whether biological categories are overrepresented. This is a downstream interpretation step, not a replacement for looking at the expression data.
+Once you have a gene list, enrichment analysis asks if biological functions are over-represented. It's downstream interpretation, not a replacement for looking at actual expression.
 
-```r
-library(clusterProfiler)
-library(org.Hs.eg.db)
-
-sig_entrez <- res_tbl |>
-  filter(padj < 0.05, abs(log2FoldChange) > 1, !is.na(entrez)) |>
-  pull(entrez) |>
-  unique()
-
-ego <- enrichGO(
-  gene = sig_entrez,
-  OrgDb = org.Hs.eg.db,
-  keyType = "ENTREZID",
-  ont = "BP",
-  pAdjustMethod = "BH",
-  qvalueCutoff = 0.05,
-  readable = TRUE
-)
-
-dotplot(ego, showCategory = 15)
-```
-
-Enrichment results depend on the background universe. A better background is the set of genes that passed filtering and could have been detected, not every gene in the genome.
-
-```r
-background <- res_tbl |>
-  filter(!is.na(padj), !is.na(entrez)) |>
-  pull(entrez) |>
-  unique()
-
-ego <- enrichGO(
-  gene = sig_entrez,
-  universe = background,
-  OrgDb = org.Hs.eg.db,
-  keyType = "ENTREZID",
-  ont = "BP",
-  pAdjustMethod = "BH",
-  qvalueCutoff = 0.05,
-  readable = TRUE
-)
-```
+Use the right background universe — genes that could have been detected, not every gene in the genome.
 
 ## Common Failure Modes
 
@@ -1054,35 +919,35 @@ ego <- enrichGO(
 
 ## Reporting Checklist
 
-A reproducible RNA-seq report should include:
+Include in every RNA-seq report:
 
 1. Biological question and contrast.
-2. Sample sheet with sample IDs, conditions, batches, and replicate labels.
-3. Reference genome and annotation source with version.
-4. Tool names and versions.
-5. QC summary: read counts, mapping rates, assigned-read rates, outliers.
+2. Sample metadata (IDs, conditions, batches, replicates).
+3. Reference version.
+4. Tool versions.
+5. QC summary — read counts, mapping, assigns, outliers.
 6. Statistical design formula.
-7. Filtering rule for low-count genes.
-8. Differential expression contrast and threshold.
-9. PCA, sample distance heatmap, MA plot, volcano plot, and top-gene heatmap.
-10. A table of results with gene IDs, symbols, baseMean, log2 fold change, p-value, and adjusted p-value.
+7. Low-count filtering rule.
+8. DE threshold (padj and fold-change cutoff).
+9. All the plots — PCA, distance, MA, volcano, heatmap.
+10. Results table — gene ID, symbol, baseMean, log2 fold change, p-value, padj.
 
 ## Workflow Managers
 
-The commands in this chapter are deliberately explicit so you can understand each step. For production work, use a workflow manager. The following chapters cover Nextflow, nf-core, and the `nf-core/rnaseq` community pipeline, which bundles QC, trimming, alignment or pseudoalignment, quantification, MultiQC reporting, and reproducibility metadata.
+The commands here are explicit so you see each step. For real projects, use a workflow manager. Later chapters cover Nextflow and `nf-core/rnaseq`, which bundles QC, trimming, alignment/pseudoalignment, counting, and reports.
 
-Current `nf-core/rnaseq` usage expects a sample sheet whose first required columns are `sample`, `fastq_1`, `fastq_2`, and `strandedness`. The pipeline can infer strandedness when set to `auto`, but you should still review the strandedness checks in the MultiQC report.
+`nf-core/rnaseq` expects: `sample`, `fastq_1`, `fastq_2`, `strandedness`. Can infer strandedness with `auto`, but check the MultiQC report anyway.
 
-The goal is not to memorize every command, but to understand what each stage consumes and produces:
+The pipeline flow:
 
 ```text
 FASTQ + sample sheet + reference
   -> QC report
   -> alignments or transcript quantifications
   -> gene count matrix
-  -> normalized exploratory plots
-  -> differential expression table
-  -> biological interpretation
+  -> exploratory plots
+  -> differential expression results
+  -> biology
 ```
 
 ## Exercises
@@ -1099,6 +964,6 @@ FASTQ + sample sheet + reference
 
 ## Further Reading
 
-The Biostar Handbook's *RNA-Seq by Example* emphasizes confidence-building checks: understand the reference, understand the reads, create a design file, compare alignment and classification approaches, and inspect normalized expression before interpreting differential expression. Ming Tang's RNA-seq analysis notes collect many practical references on experimental design, QC, normalization assumptions, Salmon/kallisto, batch effects, and downstream enrichment. Together, they are useful companions for moving from this compact chapter to full project analysis.
+Biostar Handbook's *RNA-Seq by Example* teaches the confidence-building checks. Ming Tang's RNA-seq notes are practical on design, QC, batch effects, Salmon/kallisto, enrichment. Both are solid companions beyond this chapter.
 
 For current tool behavior, consult the official vignettes and documentation for [DESeq2](https://www.bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html), [edgeR](https://bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf), [tximport](https://bioconductor.org/packages/release/bioc/vignettes/tximport/inst/doc/tximport.html), [Salmon](https://salmon.readthedocs.io/en/latest/salmon.html), [kallisto](https://pachterlab.github.io/kallisto/manual), [STAR](https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf), [HISAT2](http://daehwankimlab.github.io/hisat2/manual/), [featureCounts](https://subread.sourceforge.net/featureCounts.html), [MultiQC](https://seqera.io/multiqc/), and [nf-core/rnaseq](https://nf-co.re/rnaseq/).

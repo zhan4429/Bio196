@@ -2,11 +2,11 @@
 
 ## Why the Command Line?
 
-If you are new to bioinformatics, the command line may seem like an unnecessary detour — why type commands when you could click buttons? The answer lies in the nature of biological data itself.
+If you're new to bioinformatics, the command line may seem like an unnecessary detour. But the answer lies in the nature of biological data itself.
 
 Modern sequencing experiments generate gigabytes or terabytes of data. A single RNA-seq run can produce hundreds of millions of reads across dozens of samples. No graphical interface can efficiently handle this scale. The command line, by contrast, is built for exactly this kind of work: it is fast, scriptable, easily automated, and runs the same way on your laptop as on a supercomputing cluster with thousands of cores.
 
-Nearly every bioinformatics tool — `bwa`, `samtools`, `GATK`, `DESeq2`, `Snakemake` — is designed to be run from the command line. Mastering the shell is not optional; it is the entry ticket to computational biology.
+Every major bioinformatics tool (`bwa`, `samtools`, `GATK`, `DESeq2`, `Snakemake`) is designed to run from the command line. Mastering the shell isn't optional—it's your entry ticket to computational biology.
 
 ::: {.callout-note}
 ## The Unix Philosophy
@@ -25,7 +25,7 @@ By the end of this chapter, you should be able to:
 5. Use shell history, command-line editing shortcuts, and globbing patterns to type commands faster.
 6. Read a manual page and use `--help` to discover what a tool can do without leaving the terminal.
 
-![The Unix filesystem tree: everything lives under the root `/`. Your home directory `~` is typically `/home/username`.](../images/01-filesystem-tree.png){fig-align="center" width="80%"}
+![Unix filesystem tree. All files and directories start at the root directory `/`. On the Tufts HPC cluster, your home directory is  `/cluster/home/username`, which can also be written as `~`. On other systems, the home directory path may be different.](../images/01-filesystem-tree.png){fig-align="center" width="80%"}
 
 ## Opening a Terminal
 
@@ -70,7 +70,7 @@ Short options can often be combined: `-lh` is the same as `-l -h`.
 
 ## Navigating the Filesystem
 
-The Unix filesystem is organized as a tree rooted at `/` (the "root" directory). Everything — files, programs, devices — lives somewhere under `/`.
+The Unix filesystem is organized as a tree rooted at `/` (the "root" directory). Everything lives somewhere under `/`: files, programs, devices.
 
 ```bash
 pwd           # print working directory — where am I?
@@ -97,14 +97,14 @@ A **path** is the address of a file or directory in the filesystem. There are tw
 
 | Type | Description | Example |
 |------|-------------|---------|
-| Absolute | Always starts from root `/` | `/home/user/data/genome.fa` |
+| Absolute | Always starts from root `/` | `/cluster/tufts/biocontainers/datasets` |
 | Relative | Relative to your current location | `../data/genome.fa` |
 
 Special path shortcuts:
 
 | Symbol | Meaning |
 |--------|---------|
-| `~` | Your home directory (`/home/username`) |
+| `~` | Your home directory (`/cluster/home/username`) |
 | `.` | Current directory |
 | `..` | Parent directory |
 | `-` | Previous directory (used with `cd`) |
@@ -126,6 +126,8 @@ drwxr-xr-x  2  user  group  4096  Mar 15 09:00  results/
 ```
 
 The first column is the permission string. Read it from left to right:
+
+![Linux file permission string. In `ls -l` output, the first character shows the file type, followed by three permission groups for the owner, group, and others. Each group uses `r`, `w`, and `x` to indicate read, write, and execute access.](../images/01-linux-file-permissions.png){fig-align="center" width="80%"}
 
 | Position | Meaning |
 |----------|---------|
@@ -189,7 +191,7 @@ echo $PWD        # current directory (same as pwd)
 printenv         # list all environment variables
 ```
 
-The `$PATH` variable is particularly important — it is a colon-separated list of directories the shell searches when you type a command. If a tool is not found, it is usually because its directory is not in your `$PATH`.
+The `$PATH` variable is particularly important. It's a colon-separated list of directories the shell searches when you type a command. If a tool isn't found, it's usually because its directory isn't in your `$PATH`.
 
 ```bash
 # Add a directory to your PATH for the current session
@@ -208,7 +210,7 @@ A common mistake is writing `PATH=something` instead of `PATH=something:$PATH`. 
 
 ## Checking Disk Space and Running Processes
 
-Bioinformatics beginners often master `grep` before thinking to ask a more pressing question: "Am I about to fill the disk?" Sequencing data and intermediate files are large, so disk and process checks are everyday shell skills.
+You'll often learn `grep` before asking a more urgent question: "Is the disk about to fill up?" Sequencing data produces huge files, so checking disk space and processes should be second nature.
 
 ### Disk Usage
 
@@ -284,7 +286,7 @@ Many tools (including `bwa`, `samtools`, `STAR`) write their progress and warnin
 
 ## Pipes: Connecting Commands
 
-The **pipe** (`|`) sends the stdout of one command directly into the stdin of the next — without writing any intermediate files to disk. This is the essence of the Unix philosophy in action.
+The **pipe** (`|`) sends the stdout of one command directly into the stdin of the next without writing intermediate files to disk. This is Unix philosophy in action.
 
 ![Unix pipes connect commands into a pipeline. Data flows left-to-right as a stream — no temporary files, no wasted disk I/O.](../images/01-pipe-flow.png){fig-align="center" width="90%"}
 
@@ -294,25 +296,13 @@ grep ">" sequences.fa | wc -l        # count the number of sequences
 samtools view aligned.bam | head -5  # preview an alignment file
 ```
 
-You can chain as many commands as needed:
+You can chain as many commands as you need:
 
 ```bash
 cat genes.gff | grep "exon" | cut -f1 | sort | uniq -c | sort -rn
 ```
 
-This pipeline:
-
-1. Reads a GFF annotation file
-
-2. Filters to exon features only
-
-3. Extracts the chromosome column
-
-4. Sorts the chromosomes alphabetically
-
-5. Counts unique chromosomes
-
-6. Sorts by count, descending
+This does six things: reads a GFF file, filters for exons, extracts chromosomes, sorts them alphabetically, counts unique ones, and sorts by count in descending order.
 
 ::: {.callout-note}
 ## Pipes vs. Files
@@ -322,7 +312,7 @@ Pipes process data as a **stream** — each command starts processing as soon as
 
 ## Tab Completion and History
 
-Two shell features will dramatically speed up your work:
+Two shell features make you much faster:
 
 ### Tab Completion
 
@@ -361,7 +351,7 @@ Ctrl+R            # interactive reverse history search (very useful!)
 
 ## Terminal Multiplexing with tmux
 
-Bioinformatics jobs can take hours or days. If your network connection drops or your laptop closes, a running job in a plain terminal is killed immediately. **tmux** (terminal multiplexer) solves this by running your shell sessions inside a persistent server — you can detach, close your laptop, reconnect hours later, and find everything exactly as you left it.
+Bioinformatics jobs often run for hours or days. If your network drops or your laptop closes, a job in a plain terminal dies immediately. **tmux** (terminal multiplexer) changes that: your shell sessions run on a persistent server, so you can detach, close your laptop, reconnect later, and pick up exactly where you left off.
 
 ### Installing tmux
 
@@ -373,7 +363,7 @@ conda install -c conda-forge tmux   # Conda environment
 
 ### The tmux Survival Guide
 
-The essential workflow: **create a named session → run your job → detach → reattach later**.
+The workflow is simple: create a named session, run your job, detach, and reattach later.
 
 ```bash
 tmux new -s rnaseq             # create a session named "rnaseq"

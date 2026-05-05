@@ -12,7 +12,7 @@ The relationship works like this:
 
 ![The nf-core ecosystem provides curated pipelines, shared modules, community-maintained container images, institutional HPC configurations, and a testing framework -- all built on Nextflow.](../images/14-nfcore-ecosystem.png){fig-align="center" width="92%"}
 
-For many biologists, nf-core is the most practical entry point to reproducible pipelines. You do not need to write a Nextflow pipeline from scratch to get started. The main requirements are preparing a correct input table, choosing the right parameters, running a test, and reviewing the output reports.
+For many biologists, nf-core is the most practical entry point to reproducible pipelines. You don't need to write Nextflow from scratch. Instead, you prepare a samplesheet, pick your parameters, run the test, and check the reports.
 
 ## Why Use nf-core?
 
@@ -28,7 +28,7 @@ nf-core pipelines are useful because they package many best practices together:
 | MultiQC reports | Many quality-control results are collected into one HTML report. |
 | Community documentation | Each pipeline has a web page explaining inputs, parameters, and outputs. |
 
-This does not mean nf-core pipelines are magic. They still require good experimental design, correct sample labels, suitable reference genomes, and careful interpretation. nf-core makes the computational steps more reproducible; it does not replace biological judgment.
+nf-core handles the computational reproducibility, but it won't save you from bad experimental design, mislabeled samples, or the wrong reference genome. It also can't tell you whether your results make biological sense. You still need all of that.
 
 ## Common nf-core Pipelines
 
@@ -46,7 +46,7 @@ nf-core contains pipelines for many types of sequencing data. The exact catalog 
 | `nf-core/scrnaseq` | Single-cell RNA-seq | Processing single-cell and single-nucleus RNA-seq data |
 | `nf-core/methylseq` | Bisulfite sequencing | DNA methylation analysis |
 
-The safest habit is to start at the pipeline web page, read the usage page, and then run the built-in test profile before using your own data.
+Start with the pipeline web page, read the usage guide, and run the built-in test before you touch your own data.
 
 ## Installing nf-core Tools
 
@@ -57,7 +57,7 @@ nextflow run nf-core/rnaseq -r 3.24.0 \
     -profile test,docker --outdir test_results
 ```
 
-The separate `nf-core` command-line tool is helpful for browsing, launching, downloading, and checking pipelines:
+You can also install the `nf-core` command-line tool, which makes it easier to list, launch, download, and validate pipelines:
 
 ```bash
 # Install with Conda
@@ -80,7 +80,7 @@ On a shared HPC cluster, ask your bioinformatics or HPC support team which insta
 
 ## The Standard Run Pattern
 
-Most nf-core runs follow the same shape:
+Most nf-core runs look like this:
 
 ```bash
 nextflow run nf-core/<pipeline> \
@@ -156,7 +156,7 @@ If the test succeeds, then Nextflow, the pipeline download, containers, and the 
 
 ## Use a Parameter File
 
-Long commands become hard to read. A parameter file keeps project settings in one place.
+Commands get long and hard to share. Use a parameter file instead to keep settings in one place.
 
 Example `params.yaml`:
 

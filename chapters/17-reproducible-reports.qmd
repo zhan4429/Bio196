@@ -2,15 +2,15 @@
 
 ## The Lab Notebook Problem
 
-You run a differential expression analysis. Two months later, a reviewer asks: "What normalization method did you use? What were the exact filter thresholds? Can you regenerate Figure 3 with an additional sample group?"
+You finish a differential expression analysis. Two months later, a reviewer emails: "What normalization method did you use? What were the exact filter thresholds? Can you regenerate Figure 3 with an additional sample group?"
 
-If your analysis lives in a collection of R scripts, scattered shell commands, and manually copied figures, answering these questions means hours of archaeological reconstruction. Which script generated which figure? Did you change the filter threshold after making that table? Which version of the code produced the results in the manuscript?
+If your analysis is scattered across R scripts, shell commands, and manually copied figures, you're facing hours of detective work. Which script made which figure? Did you change the threshold *after* creating that table? You probably can't remember.
 
-**Literate programming** solves this by keeping code, results, and narrative in a single document. When you render the document, the code runs and produces the output — figures, tables, statistics — directly embedded in the report. If you change the code, the output updates automatically.
+The solution is to keep code, output, and writing together in one document. When you render it, the code runs and builds the figures, tables, and statistics right there in the report. Change the code, and the outputs update automatically. No more copy-paste, no more hunting through old scripts.
 
 ## Quarto: Next-Generation Literate Programming {#sec-quarto-intro}
 
-**Quarto** is an open-source scientific publishing system built by Posit (the makers of RStudio). It is the successor to R Markdown, with broader language support and more output formats.
+**Quarto** is an open-source publishing system from Posit (the RStudio team). It's the successor to R Markdown — wider language support, more output options, and better cross-referencing.
 
 | Feature | R Markdown | Quarto |
 |---------|-----------|--------|
@@ -25,7 +25,7 @@ If your analysis lives in a collection of R scripts, scattered shell commands, a
 ::: {.callout-note}
 ## R Markdown Still Works
 
-If your lab already uses R Markdown, it continues to work — Quarto renders `.Rmd` files without changes. For new projects, Quarto is recommended because it has better cross-referencing, multi-language support, and active development.
+If your lab already uses R Markdown, don't worry — Quarto renders `.Rmd` files as-is. For new projects, Quarto is the better choice: it has cleaner cross-referencing, native support for Python and Julia, and active development.
 :::
 
 ### Installing Quarto
@@ -115,7 +115,7 @@ In RStudio, click the **Render** button or press `Ctrl+Shift+K` / `Cmd+Shift+K`.
 
 ## Code Chunks {#sec-chunks}
 
-Code chunks are the core of literate programming — they contain the actual analysis code.
+Code chunks are where the actual analysis code lives.
 
 ### R Code Chunks
 
@@ -145,7 +145,7 @@ print(f"Loaded {counts.shape[0]} genes across {counts.shape[1]} samples")
 
 ### Chunk Options
 
-Chunk options are specified with `#|` comments (the "hash-pipe" syntax):
+Set chunk options with `#|` comments (hash-pipe syntax):
 
 | Option | Effect | Example |
 |--------|--------|---------|
@@ -162,7 +162,7 @@ Chunk options are specified with `#|` comments (the "hash-pipe" syntax):
 
 ### Inline Code
 
-Embed computed values directly in text:
+Embed live computed values directly in text:
 
 ````markdown
 We identified `{{r}} nrow(sig_genes)` significantly differentially expressed
@@ -172,9 +172,7 @@ Of these, `{{r}} sum(sig_genes$direction == "Up")` were up-regulated and
 `{{r}} sum(sig_genes$direction == "Down")` were down-regulated.
 ````
 
-This renders as: "We identified 1,432 significantly differentially expressed genes..."
-
-The numbers update automatically when the data changes — no manual editing needed.
+This renders as: "We identified 1,432 significantly differentially expressed genes..." The numbers update automatically if the data changes. No manual copy-paste.
 
 ## Cross-References {#sec-crossref}
 
@@ -386,7 +384,7 @@ rnaseq_analysis/
 
 ### Caching Long Computations
 
-Some bioinformatics analyses take hours. Use `cache: true` to avoid re-running expensive steps:
+Bioinformatics can be slow. If a chunk takes hours, use `cache: true` to skip re-running it:
 
 ````markdown
 ```{{r}}
@@ -402,12 +400,12 @@ dds <- DESeq(dds)
 ```
 ````
 
-Cached results are stored in a `_cache/` directory. Quarto re-runs the chunk only if the code changes.
+Cached results sit in a `_cache/` directory. Quarto re-runs the chunk only if you change the code.
 
 ::: {.callout-warning}
 ## Cache Invalidation
 
-Caching saves time but can produce stale results if upstream data changes without any change to the code. Use `#| dependson: "chunk-name"` to set explicit dependencies, or periodically render with `--cache-refresh` to rebuild everything:
+Caching is fast but risky: if upstream data changes and you don't touch the code, you'll get stale results. Use `#| dependson: "chunk-name"` to declare dependencies, or occasionally render with `--cache-refresh` to rebuild everything:
 
 ```bash
 quarto render analysis.qmd --cache-refresh

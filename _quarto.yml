@@ -20,28 +20,29 @@ book:
         - chapters/02-text-editing.qmd
         - chapters/03-file-manipulation.qmd
         - chapters/04-text-processing.qmd
+        - chapters/05-shell-scripting.qmd
     - part: "Week 2: SSH and High-Performance Computing"
       chapters:
-        - chapters/05-hpc.qmd
+        - chapters/06-hpc.qmd
     - part: "Week 3: Conda and Containers"
       chapters:
-        - chapters/06-conda.qmd
-        - chapters/07-docker.qmd
-        - chapters/08-apptainer.qmd
+        - chapters/07-conda.qmd
+        - chapters/08-docker.qmd
+        - chapters/09-apptainer.qmd
     - part: "Week 4: NGS and RNA-seq"
       chapters:
-        - chapters/09-ngs-sequencing.qmd
-        - chapters/10-rnaseq.qmd
+        - chapters/10-ngs-sequencing.qmd
+        - chapters/11-rnaseq.qmd
     - part: "Week 5: Nextflow and nf-core"
       chapters:
-        - chapters/11-workflow-managers.qmd
-        - chapters/12-nextflow.qmd
-        - chapters/13-nfcore.qmd
-        - chapters/14-nfcore-rnaseq.qmd
+        - chapters/12-workflow-managers.qmd
+        - chapters/13-nextflow.qmd
+        - chapters/14-nfcore.qmd
+        - chapters/15-nfcore-rnaseq.qmd
     - part: "Week 6: Version Control and Reproducible Reports"
       chapters:
-        - chapters/15-version-control.qmd
-        - chapters/16-reproducible-reports.qmd
+        - chapters/16-version-control.qmd
+        - chapters/17-reproducible-reports.qmd
     - references.qmd
 
 bibliography: references.bib

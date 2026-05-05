@@ -4,7 +4,7 @@
 
 You have spent weeks tuning an RNA-seq pipeline on your laptop. It calls `STAR` for alignment, `featureCounts` for quantification, and a custom Python script that depends on `pandas 2.1`, `numpy`, and a specific version of `pysam`. Everything works. Then you hand the pipeline to a collaborator, and it immediately breaks — their `pysam` version is too old, their `STAR` was compiled against different libraries, and their system Python is 3.8 instead of 3.11.
 
-Conda (@sec-conda) solves this at the *environment* level — it isolates packages and their dependencies. But containers go further: they package the **entire operating system**, including the kernel interface, system libraries, compilers, and user-space tools, into a single portable artifact. A container built on your laptop will behave identically on your collaborator's Mac, on a cloud VM, or on an HPC cluster — because it carries its own world with it.
+Conda (@sec-conda) solves this at the *environment* level by isolating packages and their dependencies. Containers, though, go much further. They package the **entire operating system** — the kernel interface, system libraries, compilers, and user-space tools — into a single portable artifact. A container built on your laptop will behave identically on your collaborator's Mac, on a cloud VM, or on an HPC cluster, because it carries its own world with it.
 
 **Docker** is the most widely used container platform and underpins most bioinformatics container ecosystems. This chapter covers how to use Docker to run, build, and share containerized bioinformatics tools.
 
@@ -22,7 +22,7 @@ The trade-off is that containers provide weaker isolation than VMs. For scientif
 
 ## Docker Architecture
 
-Understanding Docker's components will help you reason about what happens when you run commands.
+Docker has several key components that work together. Knowing how they interact will help you understand what happens when you run commands.
 
 ![Docker architecture: the Docker client communicates with the Docker daemon, which manages images, containers, volumes, and registry interactions.](../images/docker_architecture.png){fig-align="center" width="65%"}
 
@@ -70,24 +70,24 @@ Most HPC clusters **do not allow Docker** because the Docker daemon runs as root
 
 ## Images and Containers
 
-The distinction between *images* and *containers* is fundamental:
+*Images* and *containers* are two different things:
 
 | Concept | Analogy | Characteristics |
 |---------|---------|-----------------|
 | **Image** | A recipe or blueprint | Read-only, versioned, shareable |
 | **Container** | A dish made from the recipe | Writable, temporary, running instance |
 
-An image is built once and can spawn many containers. When a container is deleted, any changes made inside it are lost — unless you explicitly save data to a mounted volume.
+You build an image once, then use it to spawn many containers. Each container runs independently, and when it stops or is deleted, any changes inside it are lost. The original image remains unchanged unless you explicitly save data to a volume mounted on your host machine.
 
 ### Image Naming Convention
 
-Docker images follow a naming scheme:
+Images are named using a consistent scheme:
 
 ```
 [registry/]repository:tag
 ```
 
-Examples:
+Here are some examples:
 
 | Full Name | Registry | Repository | Tag |
 |-----------|----------|------------|-----|
@@ -250,10 +250,10 @@ CMD ["/bin/bash"]
 
 ### ENTRYPOINT vs. CMD
 
-These two instructions control what happens when a container starts. The difference matters:
+Both of these instructions affect what happens when a container starts, but they work differently:
 
-- **CMD**: provides a default command that can be completely overridden by the user.
-- **ENTRYPOINT**: sets a fixed executable; user arguments are *appended* to it.
+- **CMD** provides a default command that users can override completely.
+- **ENTRYPOINT** sets a fixed executable, and user arguments are *appended* to it.
 
 ```dockerfile
 # CMD approach — user can override everything
@@ -285,7 +285,7 @@ The `-t` flag assigns a name and tag. The `.` tells Docker to use the current di
 
 ### Using Conda in a Dockerfile
 
-For bioinformatics, starting from a Conda base image is often the fastest path to a working container:
+In bioinformatics, many of the tools you want are already packaged in Bioconda. Starting from a Conda base image is usually the quickest way to build a working container:
 
 ```dockerfile
 FROM condaforge/miniforge3:latest
@@ -317,7 +317,7 @@ CMD ["/bin/bash"]
 
 ## Multi-Stage Builds {#sec-multistage}
 
-Bioinformatics tools often require compilers, development headers, and build tools that are not needed at runtime. A **multi-stage build** uses one stage to compile software and a second, smaller stage to hold only the final binaries:
+Many bioinformatics tools need compilers, development headers, and build tools during compilation, but you don't need any of that after the binary is built. A **multi-stage build** lets you compile in one stage and then copy only the final binary into a clean, smaller stage for production:
 
 ```dockerfile
 # Stage 1: Build
@@ -354,9 +354,9 @@ The final image contains only the runtime libraries and compiled binary — no c
 
 ## Dockerfile Best Practices
 
-Following these practices produces smaller, faster, more reproducible images:
+Follow these practices to build smaller, faster, more reproducible images:
 
-1. **Combine `RUN` commands with `&&`**. Each `RUN` creates a layer. Combining related commands into a single `RUN` reduces layers and image size — especially when you install packages and then clean up caches in the same step.
+1. **Combine `RUN` commands with `&&`.** Each `RUN` instruction creates a layer in your image. If you combine related commands into a single `RUN`, you'll have fewer layers and smaller images. This matters especially when you install packages and then clean up caches in the same step.
 
     ```dockerfile
     # Good — single layer, cache cleaned
@@ -369,13 +369,13 @@ Following these practices produces smaller, faster, more reproducible images:
     RUN rm -rf /var/lib/apt/lists/*
     ```
 
-2. **Order instructions from least to most frequently changing**. Docker caches layers from top to bottom. Put stable layers (OS packages) early and volatile layers (your scripts) late, so rebuilds reuse the cached base.
+2. **Order instructions from stable to volatile.** Docker caches layers from top to bottom. Put your stable layers first — like OS package installation — and save your frequently changing layers for last, such as your scripts. That way, rebuilds can reuse the cached base without recomputing everything from scratch.
 
 3. **Use `--no-install-recommends`** with `apt-get` to skip optional packages and keep the image lean.
 
-4. **Pin all versions** — base images, packages, tools. Unversioned installs will silently change over time.
+4. **Pin all versions.** Always specify exact versions for base images, packages, and tools. If you don't, unversioned installs will silently change as new releases come out, breaking your reproducibility.
 
-5. **Do not store data in images**. Mount data at runtime with `-v`. Images should contain only software.
+5. **Don't store data in images.** Mount your data at runtime with `-v`. Images should contain only software and configurations, not your research data.
 
 6. **Use `.dockerignore`** to exclude large or sensitive files from the build context:
 
@@ -390,18 +390,18 @@ Following these practices produces smaller, faster, more reproducible images:
 
 ## BioContainers: Pre-Built Bioinformatics Images {#sec-biocontainers}
 
-[BioContainers](https://biocontainers.pro/) is a community-driven project that provides ready-to-use container images for thousands of bioinformatics tools. Every package in [Bioconda](https://bioconda.github.io/) is automatically built into both a Docker image and a Singularity image.
+[BioContainers](https://biocontainers.pro/) is a community project that provides pre-built container images for thousands of bioinformatics tools. Whenever a new package is added to [Bioconda](https://bioconda.github.io/), it's automatically packaged into both a Docker image and a Singularity image and made available.
 
 ### Finding Images
 
-The BioContainers registry hosts images on two main registries:
+BioContainers images are hosted on two main registries:
 
 | Registry | URL Pattern | Example |
 |----------|------------|---------|
 | **Quay.io** | `quay.io/biocontainers/<tool>:<tag>` | `quay.io/biocontainers/samtools:1.20--h50ea8bc_1` |
 | **Docker Hub** | `biocontainers/<tool>:<tag>` | `biocontainers/samtools:v1.9-4-deb_cv1` |
 
-Browse available images at [biocontainers.pro](https://biocontainers.pro/) or search from the command line:
+You can browse available images at [biocontainers.pro](https://biocontainers.pro/) or search from the command line:
 
 ```bash
 # Search Docker Hub
@@ -432,7 +432,7 @@ BioContainers also offers **mulled** containers that bundle multiple tools into 
 
 ## Docker Compose: Multi-Container Applications
 
-Some bioinformatics setups require multiple services — for example, a Galaxy server with a database, or a Jupyter notebook with a connected BLAST server. **Docker Compose** defines multi-container applications in a single YAML file.
+Some bioinformatics workflows need multiple services at once: a Galaxy server and its database, or a Jupyter notebook connected to a BLAST server. **Docker Compose** lets you define all of these services in a single YAML file and run them together.
 
 ```yaml
 # docker-compose.yml
@@ -463,7 +463,7 @@ docker compose ps
 docker compose down
 ```
 
-Docker Compose is particularly useful for setting up reproducible analysis environments that combine a notebook interface with bioinformatics databases or services.
+This is particularly useful if you want a reproducible analysis environment that pairs a notebook interface with databases or other services.
 
 ## Sharing Images via Registries
 
@@ -482,7 +482,7 @@ docker push yourusername/my-variant-tools:v1.0
 
 ### Saving and Loading Images Offline
 
-When you do not have registry access (common on HPC clusters), you can export and import images as tar files:
+If you don't have internet access or registry access (common on HPC clusters), you can save images as tar files and move them around:
 
 ```bash
 # Save an image to a tar file
@@ -496,7 +496,7 @@ This workflow is useful as a bridge to HPC: build and test on your laptop, save 
 
 ## Using Docker Containers in Workflow Managers
 
-Both Snakemake and Nextflow have native support for Docker containers, making it straightforward to run each pipeline step in an isolated environment.
+Both Snakemake and Nextflow support Docker natively, so you can run each pipeline step in its own container with minimal extra configuration.
 
 ### Snakemake
 
