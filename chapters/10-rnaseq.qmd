@@ -1,0 +1,1104 @@
+# RNA-seq Analysis
+
+## Learning Goals
+
+By the end of this chapter, you should be able to:
+
+1. Explain the difference between alignment-based and transcriptome-based RNA-seq quantification.
+2. Organize a bulk RNA-seq project so that it can be rerun and audited.
+3. Inspect FASTQ files, reference files, annotations, and sample metadata before running statistical tests.
+4. Produce a gene-level count matrix from either BAM files or Salmon transcript quantifications.
+5. Run a basic differential expression analysis with DESeq2 and interpret the most important output columns.
+6. Create quality-control plots, heatmaps, volcano plots, and a small enrichment analysis.
+
+This chapter focuses on bulk RNA-seq. Single-cell RNA-seq, spatial transcriptomics, long-read isoform sequencing, and differential transcript usage use related ideas, but their statistical models and quality-control questions are different enough to deserve separate workflows.
+
+## The Big Picture
+
+RNA-seq measures fragments sampled from RNA molecules. The computational problem is to turn those fragments into a table where rows are genes or transcripts, columns are samples, and values represent expression evidence.
+
+A typical bulk RNA-seq analysis has two connected halves:
+
+1. **Quantification**: FASTQ reads become a count matrix.
+2. **Statistical analysis**: the count matrix and sample metadata become differential expression results.
+
+The two most common quantification strategies are:
+
+| Strategy | Main idea | Typical tools | Best for |
+|---|---|---|---|
+| Genome alignment | Align reads to the genome, then count overlaps with annotated genes or exons. | STAR, HISAT2, featureCounts, HTSeq | Inspectable alignments, novel junction checks, organisms with good genome annotations |
+| Transcriptome quantification | Assign reads directly to known transcripts and estimate transcript abundance. | Salmon, kallisto, tximport | Fast routine quantification, transcript-aware gene summaries |
+
+Both strategies are legitimate choices. Alignment gives you a BAM file that can be opened in IGV and interrogated when something looks suspicious. Salmon and kallisto are fast and model transcript ambiguity directly, but their results depend strongly on the completeness and correctness of the transcriptome reference.
+
+### Choosing an Aligner
+
+Not all aligners are appropriate for RNA-seq. The critical difference is **splice awareness** — RNA-seq reads frequently span exon-exon junctions, and a splice-aware aligner can split a single read across two exons separated by an intron.
+
+| Aligner | Splice-Aware? | Best For | Memory | Speed |
+|---------|:------------:|----------|--------|-------|
+| **STAR** | Yes | RNA-seq (gold standard) | High (~30 GB for human) | Very fast |
+| **HISAT2** | Yes | RNA-seq (memory-efficient) | Low (~8 GB for human) | Fast |
+| **Bowtie2** | No | DNA-seq, ChIP-seq, miRNA, metagenomics | Low | Fast |
+| **BWA MEM** | No | DNA-seq, WGS, WES | Moderate | Fast |
+
+::: {.callout-warning}
+## Do Not Use Bowtie2 for Standard RNA-Seq
+
+Bowtie2 is a general-purpose short-read aligner — it does **not** handle spliced alignments. If you align RNA-seq reads with Bowtie2 against a genome, reads that span exon-exon junctions will either fail to map or map incorrectly. Use STAR or HISAT2 instead.
+
+Bowtie2 *is* appropriate for aligning RNA-seq reads against a **transcriptome** (pre-spliced transcript sequences), or for non-spliced applications like ChIP-seq, ATAC-seq, and whole-genome sequencing.
+:::
+
+**When to choose STAR vs. HISAT2:**
+
+- **STAR**: the most widely used RNA-seq aligner. Produces high-quality splice junction detection, supports chimeric alignment for fusion gene detection, and can count reads per gene during alignment (`--quantMode GeneCounts`). Requires ~30 GB RAM for the human genome index. Preferred for most production RNA-seq pipelines (including nf-core/rnaseq).
+- **HISAT2**: uses a hierarchical indexing scheme that requires only ~8 GB RAM for the human genome. Ideal for systems with limited memory, or for organisms with very large genomes. Slightly faster than STAR in some benchmarks, but junction detection may be less sensitive for rare splice events.
+
+![A bulk RNA-seq analysis turns reads and metadata into a count matrix, then into statistical results and biological interpretation.](../images/09-rnaseq-pipeline-overview.png){#fig-rnaseq-pipeline-overview fig-align="center" width="95%"}
+
+::: {.callout-tip}
+## Practical Recommendation
+
+For a teaching project, run both at least once. Use Salmon for the fast routine analysis, but learn to inspect alignments with STAR or HISAT2 so you can diagnose failed libraries, wrong strandedness, annotation mismatches, contamination, and surprising genes.
+:::
+
+## Project Layout
+
+Do not run RNA-seq in your home directory. Create a project directory with predictable subdirectories:
+
+```bash
+rnaseq-project/
+|-- data/
+|   |-- raw_fastq/
+|   `-- samples.csv
+|-- refs/
+|   |-- genome.fa
+|   |-- genes.gtf
+|   `-- transcripts.fa
+|-- results/
+|   |-- fastqc/
+|   |-- multiqc/
+|   |-- salmon/
+|   |-- star/
+|   |-- counts/
+|   `-- deseq2/
+|-- scripts/
+`-- envs/
+```
+
+Keep raw data read-only. Put scripts under version control. Write results into `results/` rather than mixing outputs into `data/`.
+
+A minimal paired-end sample sheet might look like this:
+
+```csv
+sample,condition,batch,strandedness,fastq_1,fastq_2
+ctrl_1,control,A,reverse,fastq/ctrl_1_R1.fastq.gz,fastq/ctrl_1_R2.fastq.gz
+ctrl_2,control,B,reverse,fastq/ctrl_2_R1.fastq.gz,fastq/ctrl_2_R2.fastq.gz
+trt_1,treatment,A,reverse,fastq/trt_1_R1.fastq.gz,fastq/trt_1_R2.fastq.gz
+trt_2,treatment,B,reverse,fastq/trt_2_R1.fastq.gz,fastq/trt_2_R2.fastq.gz
+```
+
+The `sample` values should exactly match count matrix column names later. The `condition` column records the biological comparison. The `batch` column records a known technical grouping that may need to be included in the statistical design. The `strandedness` column should be one of `unstranded`, `forward`, `reverse`, or `auto` when you are using pipelines such as `nf-core/rnaseq`.
+
+If the same biological sample was run across multiple sequencing lanes, record multiple rows with the same `sample` value. These are technical runs, not biological replicates, and production pipelines usually concatenate them before downstream analysis.
+
+::: {.callout-warning}
+## Metadata Is Part of the Data
+
+If you do not know which FASTQ belongs to which biological replicate, condition, batch, strandedness, and library type, you do not yet have an analyzable RNA-seq project. Guessing metadata is how tidy-looking results become biologically meaningless.
+:::
+
+## Software Environment
+
+Use one Conda or Mamba environment for the command-line tools. Install R packages separately through Bioconductor.
+
+```bash
+mamba create -n rnaseq \
+  -c conda-forge -c bioconda \
+  fastqc multiqc fastp seqkit \
+  salmon kallisto star hisat2 bowtie2 samtools subread \
+  bedtools ucsc-bedgraphtobigwig
+
+conda activate rnaseq
+```
+
+In R:
+
+```r
+if (!require("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+BiocManager::install(c(
+  "DESeq2",
+  "edgeR",
+  "tximport",
+  "rtracklayer",
+  "apeglm",
+  "pheatmap",
+  "EnhancedVolcano",
+  "clusterProfiler",
+  "org.Hs.eg.db",
+  "AnnotationDbi"
+))
+
+install.packages(c("tidyverse", "readr", "ggplot2"))
+```
+
+For real projects, save the environment:
+
+```bash
+conda env export --from-history > envs/rnaseq.yml
+```
+
+## Three Files, Three Questions
+
+Most RNA-seq confusion comes from mixing up the roles of the reference, reads, and metadata. A good analysis starts by asking one question of each:
+
+![The three inputs to RNA-seq answer different questions and fail in different ways.](../images/09-rnaseq-three-inputs.png){#fig-rnaseq-three-inputs fig-align="center" width="85%"}
+
+## Understand the Reference
+
+Before touching the reads, inspect the reference. RNA-seq analysis is mostly a matching exercise, so mismatched chromosome names, transcript IDs, gene IDs, or annotation versions can quietly poison everything downstream.
+
+Common reference files:
+
+| File | Format | Used by |
+|---|---|---|
+| Genome sequence | FASTA | STAR, HISAT2, IGV |
+| Gene annotation | GTF or GFF3 | featureCounts, tximport gene mapping, IGV |
+| Transcriptome sequence | FASTA | Salmon, kallisto |
+
+Useful checks:
+
+```bash
+seqkit stats refs/genome.fa refs/transcripts.fa
+head refs/genes.gtf
+cut -f1 refs/genes.gtf | grep -v '^#' | sort | uniq | head
+grep '^>' refs/genome.fa | head
+```
+
+The sequence names in the GTF/GFF must match the genome FASTA. For example, `chr1` in the annotation and `1` in the genome are not the same name to most tools.
+
+For a GTF file, check which attributes are available:
+
+```bash
+grep -v '^#' refs/genes.gtf | head -1
+```
+
+You usually need `gene_id`, often `gene_name`, and sometimes `transcript_id`. If the file only contains CDS records, it is not a complete transcript annotation for gene-level RNA-seq.
+
+## Understand the Reads
+
+Start with file names, read counts, and basic FASTQ structure:
+
+```bash
+ls -lh data/raw_fastq/
+seqkit stats data/raw_fastq/*.fastq.gz
+zcat data/raw_fastq/ctrl_1_R1.fastq.gz | head
+```
+
+Then run FastQC and MultiQC:
+
+```bash
+mkdir -p results/fastqc results/multiqc
+
+fastqc \
+  --threads 8 \
+  --outdir results/fastqc \
+  data/raw_fastq/*.fastq.gz
+
+multiqc \
+  --outdir results/multiqc \
+  results/fastqc
+```
+
+In the MultiQC report, look for:
+
+| QC signal | What it may indicate |
+|---|---|
+| Very different read counts | Failed library, uneven sequencing, wrong files |
+| Adapter content | Need trimming or careful aligner handling |
+| Low per-base quality near read ends | Trimming may improve mapping |
+| Unusual GC distribution | Contamination, rRNA, biased library |
+| Overrepresented sequences | Adapters, primers, rRNA, highly abundant transcripts |
+
+![A compact QC decision tree for common RNA-seq problems found in a MultiQC report.](../images/09-rnaseq-qc-decision-tree.png){#fig-rnaseq-qc-decision-tree fig-align="center" width="85%"}
+
+Trimming is not always mandatory, but if adapter content is high, use `fastp` or Trim Galore. Example with `fastp`:
+
+```bash
+mkdir -p results/trimmed
+
+fastp \
+  --thread 8 \
+  --in1 data/raw_fastq/ctrl_1_R1.fastq.gz \
+  --in2 data/raw_fastq/ctrl_1_R2.fastq.gz \
+  --out1 results/trimmed/ctrl_1_R1.fastq.gz \
+  --out2 results/trimmed/ctrl_1_R2.fastq.gz \
+  --html results/trimmed/ctrl_1.fastp.html \
+  --json results/trimmed/ctrl_1.fastp.json
+```
+
+## Route A: Transcriptome Quantification with Salmon
+
+Salmon estimates transcript abundance from reads using a transcriptome index [@patro2017salmon]. It is fast enough for interactive learning and large enough projects.
+
+Build an index:
+
+```bash
+mkdir -p refs/salmon_index
+
+salmon index \
+  -t refs/transcripts.fa \
+  -i refs/salmon_index \
+  -k 31
+```
+
+For a production analysis, build a decoy-aware Salmon index rather than indexing only transcript sequences. Salmon's documentation recommends selective alignment with a decoy-aware transcriptome to reduce spurious assignment of reads that arise from unannotated genomic loci similar to annotated transcripts.
+
+Quantify one paired-end sample:
+
+```bash
+mkdir -p results/salmon
+
+salmon quant \
+  -i refs/salmon_index \
+  -l A \
+  --validateMappings \
+  -1 data/raw_fastq/ctrl_1_R1.fastq.gz \
+  -2 data/raw_fastq/ctrl_1_R2.fastq.gz \
+  -p 8 \
+  -o results/salmon/ctrl_1
+```
+
+The main output is:
+
+```bash
+head results/salmon/ctrl_1/quant.sf
+```
+
+Important columns in `quant.sf`:
+
+| Column | Meaning |
+|---|---|
+| `Name` | Transcript ID |
+| `Length` | Transcript length |
+| `EffectiveLength` | Length adjusted for fragment sampling |
+| `TPM` | Transcripts per million |
+| `NumReads` | Estimated number of reads assigned to the transcript |
+
+For differential expression with DESeq2, do not analyze TPM directly. Use `tximport` to import transcript-level estimates and summarize them to gene-level counts [@soneson2015tximport].
+
+Create a transcript-to-gene table from a GTF file in R:
+
+```r
+library(rtracklayer)
+library(dplyr)
+library(readr)
+
+gtf <- import("refs/genes.gtf")
+
+tx2gene <- as.data.frame(gtf) |>
+  filter(type == "transcript") |>
+  select(transcript_id, gene_id) |>
+  distinct() |>
+  filter(!is.na(transcript_id), !is.na(gene_id))
+
+write_csv(tx2gene, "refs/tx2gene.csv")
+```
+
+Then import Salmon quantifications:
+
+```r
+library(tximport)
+library(readr)
+
+samples <- read_csv("data/samples.csv")
+tx2gene <- read_csv("refs/tx2gene.csv")
+
+files <- file.path("results/salmon", samples$sample, "quant.sf")
+names(files) <- samples$sample
+
+txi <- tximport(
+  files,
+  type = "salmon",
+  tx2gene = tx2gene
+)
+```
+
+The resulting `txi` object contains abundance, count, and effective-length matrices. The preferred DESeq2 handoff is to pass the whole `txi` object into `DESeqDataSetFromTximport()`, which creates the appropriate offset for gene-level analysis. An acceptable alternative is to import with `countsFromAbundance = "lengthScaledTPM"` and then use `txi$counts` like a regular count matrix. Do not pass summed transcript counts to DESeq2 without either an offset or a `countsFromAbundance` correction.
+
+::: {.callout-note}
+## Counts, TPM, and Normalized Counts
+
+Raw counts are for statistical testing. TPM is for comparing relative abundance within or across samples after length correction. DESeq2 normalized counts are for QC plots and interpretation. Avoid mixing these roles.
+:::
+
+### Transcriptome Quantification with kallisto
+
+**kallisto** is an alternative to Salmon that uses a pseudoalignment approach based on k-mer hashing [@bray2016near]. It is extremely fast and produces transcript-level abundance estimates that can be imported with `tximport` in the same way as Salmon.
+
+#### Build a kallisto Index
+
+```bash
+kallisto index \
+  -i refs/kallisto_index \
+  refs/transcripts.fa
+```
+
+#### Quantify One Sample
+
+```bash
+mkdir -p results/kallisto/ctrl_1
+
+kallisto quant \
+  -i refs/kallisto_index \
+  -o results/kallisto/ctrl_1 \
+  -t 8 \
+  -b 100 \
+  data/raw_fastq/ctrl_1_R1.fastq.gz \
+  data/raw_fastq/ctrl_1_R2.fastq.gz
+```
+
+Key flags:
+
+| Flag | Purpose |
+|------|---------|
+| `-t 8` | Use 8 threads |
+| `-b 100` | Run 100 bootstrap samples (for uncertainty estimation; used by sleuth) |
+| `--rf-stranded` | For reverse-stranded libraries |
+| `--fr-stranded` | For forward-stranded libraries |
+
+The main output file is `abundance.tsv`:
+
+```bash
+head results/kallisto/ctrl_1/abundance.tsv
+# target_id     length  eff_length  est_counts  tpm
+# ENST00000456328  1657    1468.43     52.000     3.21
+```
+
+#### Import kallisto Results with tximport
+
+```r
+library(tximport)
+
+files <- file.path("results/kallisto", samples$sample, "abundance.h5")
+names(files) <- samples$sample
+
+txi_kallisto <- tximport(
+  files,
+  type = "kallisto",
+  tx2gene = tx2gene
+)
+```
+
+The `txi_kallisto` object feeds into `DESeqDataSetFromTximport()` identically to the Salmon output.
+
+### Salmon vs. kallisto: When to Use Which
+
+| Feature | Salmon | kallisto |
+|---------|--------|---------|
+| Algorithm | Quasi-mapping + EM | Pseudoalignment + EM |
+| Bias correction | GC bias, positional bias, fragment-length bias | None built-in |
+| Decoy-aware index | Yes (recommended for production) | No |
+| Selective alignment mode | Yes (improves accuracy) | No |
+| Speed | Very fast | Slightly faster |
+| Downstream tools | tximport → DESeq2/edgeR | tximport → DESeq2/edgeR; also sleuth |
+| Bootstrap support | Yes | Yes |
+
+::: {.callout-tip}
+## Practical Recommendation
+
+**Salmon** is the safer default for production RNA-seq because its bias correction models improve accuracy, especially for genes with extreme GC content. **kallisto** is excellent for quick exploratory analyses and integrates natively with **sleuth** for transcript-level differential expression. Both produce comparable results for most datasets.
+:::
+
+## Route B: Genome Alignment and Feature Counting
+
+Genome alignment is slower, but it produces alignments you can inspect. Use splice-aware aligners for RNA-seq. STAR is fast and widely used [@dobin2013star]; HISAT2 is memory efficient [@kim2019hisat2].
+
+![Two common RNA-seq quantification routes produce a gene-level count matrix through different intermediate files.](../images/09-rnaseq-quantification-routes.png){#fig-rnaseq-quantification-routes fig-align="center" width="95%"}
+
+### Build a STAR Index
+
+```bash
+mkdir -p refs/star_index
+
+STAR \
+  --runThreadN 8 \
+  --runMode genomeGenerate \
+  --genomeDir refs/star_index \
+  --genomeFastaFiles refs/genome.fa \
+  --sjdbGTFfile refs/genes.gtf \
+  --sjdbOverhang 99
+```
+
+Set `--sjdbOverhang` to read length minus 1. For 100 bp reads, use `99`.
+
+### Align One Sample
+
+```bash
+mkdir -p results/star/ctrl_1
+
+STAR \
+  --runThreadN 8 \
+  --genomeDir refs/star_index \
+  --readFilesIn fastq/ctrl_1_R1.fastq.gz \
+    fastq/ctrl_1_R2.fastq.gz \
+  --readFilesCommand zcat \
+  --outSAMtype BAM SortedByCoordinate \
+  --outFileNamePrefix results/star/ctrl_1/
+
+samtools index results/star/ctrl_1/Aligned.sortedByCoord.out.bam
+```
+
+### Align with HISAT2
+
+HISAT2 is a memory-efficient alternative to STAR. Its index is much smaller (~8 GB vs. ~30 GB for human), making it practical on laptops and memory-constrained HPC nodes.
+
+#### Build a HISAT2 Index
+
+```bash
+mkdir -p refs/hisat2_index
+
+hisat2-build \
+  -p 8 \
+  refs/genome.fa \
+  refs/hisat2_index/genome
+```
+
+For splice-aware alignment, you can optionally extract known splice sites and exons from the GTF to improve junction detection:
+
+```bash
+# Extract splice sites and exons from GTF
+hisat2_extract_splice_sites.py refs/genes.gtf \
+  > refs/hisat2_index/splice_sites.txt
+hisat2_extract_exons.py refs/genes.gtf > refs/hisat2_index/exons.txt
+
+# Build index with known splice sites
+hisat2-build \
+  -p 8 \
+  --ss refs/hisat2_index/splice_sites.txt \
+  --exon refs/hisat2_index/exons.txt \
+  refs/genome.fa \
+  refs/hisat2_index/genome
+```
+
+#### Align One Sample with HISAT2
+
+```bash
+mkdir -p results/hisat2
+
+hisat2 \
+  -p 8 \
+  --dta \
+  -x refs/hisat2_index/genome \
+  -1 data/raw_fastq/ctrl_1_R1.fastq.gz \
+  -2 data/raw_fastq/ctrl_1_R2.fastq.gz \
+  2> results/hisat2/ctrl_1.hisat2.log \
+  | samtools sort -@ 4 -o results/hisat2/ctrl_1.bam
+
+samtools index results/hisat2/ctrl_1.bam
+```
+
+Key flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--dta` | Downstream transcriptome assembly mode — produces alignments better suited for transcript assemblers (StringTie) and counting tools |
+| `-p 8` | Use 8 threads |
+| `--rna-strandness RF` | For reverse-stranded libraries (dUTP protocol). Use `FR` for forward-stranded. Omit for unstranded. |
+
+Check the alignment summary in the log file:
+
+```bash
+cat results/hisat2/ctrl_1.hisat2.log
+# 25000000 reads; of these:
+#   25000000 (100.00%) were paired; of these:
+#     1250000 (5.00%) aligned concordantly 0 times
+#     22000000 (88.00%) aligned concordantly exactly 1 time
+#     1750000 (7.00%) aligned concordantly >1 times
+# 95.00% overall alignment rate
+```
+
+The BAM output from HISAT2 can be used with featureCounts exactly the same way as STAR output — the downstream counting step is identical.
+
+::: {.callout-tip}
+## Pro-Tip: STAR vs. HISAT2 on HPC
+
+If your cluster nodes have 64+ GB RAM, use STAR — it is faster and detects more splice junctions. If you are working on a laptop, a small VM, or an organism with a very large genome (e.g., wheat at ~16 GB), HISAT2's smaller memory footprint is a significant advantage.
+:::
+
+Open a few BAM files in IGV with the genome and annotation. Ask:
+
+1. Do reads pile up over exons rather than intergenic regions?
+2. Are splice junctions plausible?
+3. Are reads on the expected strand?
+4. Are a few genes consuming most reads?
+5. Do replicate tracks look roughly similar?
+
+### Count Reads with featureCounts
+
+`featureCounts` is part of the Subread package and is a fast gene-counting tool [@liao2014featurecounts].
+
+```bash
+mkdir -p results/counts
+
+featureCounts \
+  -T 8 \
+  -p \
+  --countReadPairs \
+  -s 0 \
+  -t exon \
+  -g gene_id \
+  -a refs/genes.gtf \
+  -o results/counts/gene_counts.txt \
+  results/star/ctrl_1/Aligned.sortedByCoord.out.bam \
+  results/star/ctrl_2/Aligned.sortedByCoord.out.bam \
+  results/star/trt_1/Aligned.sortedByCoord.out.bam \
+  results/star/trt_2/Aligned.sortedByCoord.out.bam
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `-p` | Input is paired-end |
+| `--countReadPairs` | Count fragments/read pairs rather than individual read alignments |
+| `-s 0` | Unstranded counting |
+| `-s 1` | Stranded counting |
+| `-s 2` | Reverse-stranded counting |
+| `-t exon` | Count reads overlapping exon records |
+| `-g gene_id` | Group exons by gene ID |
+
+Strandedness matters. Counting reverse-stranded data as unstranded blurs antisense signal; counting unstranded data as stranded can discard half your reads.
+
+Convert featureCounts output into a simple matrix:
+
+```r
+library(readr)
+library(dplyr)
+
+fc <- read_tsv(
+  "results/counts/gene_counts.txt",
+  comment = "#"
+)
+
+counts <- fc |>
+  select(Geneid, ends_with(".bam"))
+
+sample_names <- c("ctrl_1", "ctrl_2", "trt_1", "trt_2")
+names(counts) <- c("gene_id", sample_names)
+
+write_csv(counts, "results/counts/counts_matrix.csv")
+```
+
+## Differential Expression with DESeq2
+
+DESeq2 models count data with a negative binomial model, estimates size factors and dispersion, and reports log2 fold changes and adjusted p-values [@love2014deseq2].
+
+Start from either:
+
+1. `txi` from Salmon plus tximport, or
+2. a gene-level count matrix from featureCounts.
+
+### DESeq2 from a Count Matrix
+
+```r
+library(DESeq2)
+library(readr)
+library(dplyr)
+
+counts_tbl <- read_csv("results/counts/counts_matrix.csv")
+samples <- read_csv("data/samples.csv")
+
+counts <- counts_tbl |>
+  tibble::column_to_rownames("gene_id") |>
+  as.matrix()
+
+samples <- samples |>
+  filter(sample %in% colnames(counts)) |>
+  mutate(
+    condition = relevel(factor(condition), ref = "control"),
+    batch = factor(batch)
+  ) |>
+  tibble::column_to_rownames("sample")
+
+counts <- counts[, rownames(samples)]
+
+dds <- DESeqDataSetFromMatrix(
+  countData = round(counts),
+  colData = samples,
+  design = ~ batch + condition
+)
+
+keep <- rowSums(counts(dds) >= 10) >= 2
+dds <- dds[keep, ]
+
+dds <- DESeq(dds)
+
+res <- results(
+  dds,
+  contrast = c("condition", "treatment", "control"),
+  alpha = 0.05
+)
+
+resultsNames(dds)
+
+res_shrunk <- lfcShrink(
+  dds,
+  coef = "condition_treatment_vs_control",
+  type = "apeglm"
+)
+
+res_tbl <- as.data.frame(res_shrunk) |>
+  tibble::rownames_to_column("gene_id") |>
+  arrange(padj)
+
+write_csv(res_tbl, "results/deseq2/treatment_vs_control.csv")
+summary(res)
+```
+
+The design formula `~ batch + condition` means: estimate and control for batch first, then test condition. Do not include batch if it is perfectly confounded with condition. For example, if every control was sequenced in batch A and every treatment in batch B, the model cannot separate biology from batch.
+
+### DESeq2 from Salmon and tximport
+
+```r
+library(DESeq2)
+
+samples <- samples |>
+  mutate(
+    condition = relevel(factor(condition), ref = "control"),
+    batch = factor(batch)
+  ) |>
+  tibble::column_to_rownames("sample")
+
+dds <- DESeqDataSetFromTximport(
+  txi,
+  colData = samples,
+  design = ~ batch + condition
+)
+
+keep <- rowSums(counts(dds) >= 10) >= 2
+dds <- dds[keep, ]
+dds <- DESeq(dds)
+```
+
+::: {.callout-note}
+## Check `resultsNames(dds)`
+
+The coefficient name in `lfcShrink()` must match your model. Run `resultsNames(dds)` after `DESeq(dds)` and use the coefficient corresponding to the comparison you want.
+:::
+
+## Interpreting DESeq2 Output
+
+The most important DESeq2 result columns are:
+
+| Column | Meaning |
+|---|---|
+| `baseMean` | Average normalized expression across all samples |
+| `log2FoldChange` | Estimated log2 change for the contrast |
+| `lfcSE` | Standard error of the log2 fold change |
+| `stat` | Wald test statistic |
+| `pvalue` | Unadjusted p-value |
+| `padj` | Multiple-testing adjusted p-value |
+
+If the contrast is `treatment` versus `control`, a positive `log2FoldChange` means higher expression in treatment. A negative value means lower expression in treatment.
+
+Common thresholds are `padj < 0.05` and `abs(log2FoldChange) > 1`, but thresholds are not laws of nature. A gene with `padj = 0.049` is not magically different from one with `padj = 0.051`. Always inspect effect size, expression level, replicate behavior, and biological context.
+
+![DESeq2 separates exploratory visualization from formal testing; transformed counts are for QC, while the negative-binomial model uses counts.](../images/09-rnaseq-deseq2-flow.png){#fig-rnaseq-deseq2-flow fig-align="center" width="90%"}
+
+## Alternative: Differential Expression with edgeR {#sec-edger}
+
+**edgeR** is another widely used Bioconductor package for differential expression analysis. Like DESeq2, it models count data with the negative binomial distribution, but it uses a different approach to dispersion estimation and testing.
+
+### When to Use edgeR vs. DESeq2
+
+| Feature | DESeq2 | edgeR |
+|---------|--------|-------|
+| Statistical model | Negative binomial, Wald test | Negative binomial, quasi-likelihood (QL) F-test |
+| Dispersion estimation | Shrinkage estimator | Empirical Bayes, tagwise dispersion |
+| Fold change shrinkage | Built-in (`lfcShrink`) | Not built-in (use `glmTreat` for threshold testing) |
+| Normalization | Median-of-ratios | TMM (Trimmed Mean of M-values) |
+| Conservative/liberal | Slightly more conservative | Slightly more liberal (QL F-test improves this) |
+| Best for | General use, beginners, small samples | Complex designs, large datasets, experienced users |
+| Strengths | Excellent defaults, simple interface | Flexible GLM framework, TREAT method |
+
+In practice, DESeq2 and edgeR agree on the vast majority of genes. Differences typically occur for borderline genes near the significance threshold. For important findings, running both and checking agreement is good practice.
+
+### edgeR Workflow
+
+```r
+library(edgeR)
+library(readr)
+
+# ── 1. Load count matrix and metadata ──────
+counts_tbl <- read_csv("results/counts/counts_matrix.csv")
+samples <- read_csv("data/samples.csv")
+
+counts_mat <- counts_tbl |>
+  tibble::column_to_rownames("gene_id") |>
+  as.matrix()
+
+samples <- samples |>
+  mutate(
+    condition = factor(condition, levels = c("control", "treatment")),
+    batch = factor(batch)
+  )
+
+# ── 2. Create DGEList object ──────────────────────────────────────────────
+dge <- DGEList(counts = counts_mat, group = samples$condition)
+
+# ── 3. Filter low-count genes ─────────────────────────────────────────────
+keep <- filterByExpr(dge, group = samples$condition)
+dge <- dge[keep, , keep.lib.sizes = FALSE]
+cat("Kept", sum(keep), "of", length(keep), "genes\n")
+
+# ── 4. Normalize (TMM) ────────────────────────────────────────────────────
+dge <- calcNormFactors(dge, method = "TMM")
+
+# ── 5. Design matrix ──────────────────────────────────────────────────────
+design <- model.matrix(~ batch + condition, data = samples)
+
+# ── 6. Estimate dispersion ────────────────────────────────────────────────
+dge <- estimateDisp(dge, design, robust = TRUE)
+
+# ── 7. Fit the quasi-likelihood model ─────────
+fit <- glmQLFit(dge, design, robust = TRUE)
+
+# ── 8. Test for differential expression ───────
+qlf <- glmQLFTest(fit, coef = "conditiontreatment")
+
+# ── 9. Extract results ────────────────────────────────────────────────────
+res_edger <- topTags(qlf, n = Inf) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("gene_id") |>
+  dplyr::arrange(FDR)
+
+# Summary
+summary(decideTests(qlf, p.value = 0.05, lfc = 1))
+```
+
+### Understanding edgeR Output
+
+| Column | Meaning |
+|--------|---------|
+| `logFC` | Log2 fold change (treatment vs. control) |
+| `logCPM` | Average log2 counts per million |
+| `F` | Quasi-likelihood F-statistic |
+| `PValue` | Unadjusted p-value |
+| `FDR` | False discovery rate (BH-adjusted p-value) |
+
+### edgeR from Salmon/kallisto via tximport
+
+edgeR can also start from transcript-level estimates:
+
+```r
+library(tximport)
+library(edgeR)
+
+# Import with tximport (same txi object as before)
+txi <- tximport(files, type = "salmon", tx2gene = tx2gene,
+                countsFromAbundance = "no")
+
+# Create DGEList with offset from tximport
+cts <- txi$counts
+normMat <- txi$length
+normMat <- normMat / exp(rowMeans(log(normMat)))
+o <- log(calcNormFactors(cts / normMat)) + log(colSums(cts / normMat))
+
+dge <- DGEList(counts = cts)
+dge$offset <- t(t(log(normMat)) + o)
+
+# Continue with design, dispersion, fit, test as above
+```
+
+### Comparing DESeq2 and edgeR Results
+
+A useful sanity check is to compare the two methods:
+
+```r
+# Merge results by gene_id
+comparison <- dplyr::inner_join(
+  res_tbl |> dplyr::select(gene_id,
+    deseq2_lfc = log2FoldChange, deseq2_padj = padj),
+  res_edger |> dplyr::select(gene_id, edger_lfc = logFC, edger_fdr = FDR),
+  by = "gene_id"
+)
+
+# Fold changes should be highly correlated
+cor(comparison$deseq2_lfc, comparison$edger_lfc, use = "complete.obs")
+# Typically > 0.95
+
+# How many genes agree on significance?
+both_sig <- sum(
+  comparison$deseq2_padj < 0.05 &
+    comparison$edger_fdr < 0.05, na.rm = TRUE)
+deseq2_only <- sum(
+  comparison$deseq2_padj < 0.05 &
+    comparison$edger_fdr >= 0.05, na.rm = TRUE)
+edger_only <- sum(
+  comparison$deseq2_padj >= 0.05 &
+    comparison$edger_fdr < 0.05, na.rm = TRUE)
+
+cat("Both:", both_sig, "\n")
+cat("DESeq2 only:", deseq2_only, "\n")
+cat("edgeR only:", edger_only, "\n")
+```
+
+::: {.callout-tip}
+## Pro-Tip: Which Tool to Report?
+
+Pick one tool as your primary analysis and report it in the methods section. Mention the other as a concordance check. Do not cherry-pick genes from whichever tool gives the lower p-value — that inflates your false discovery rate.
+
+For beginners, **DESeq2** is recommended because its default settings are well-calibrated and the documentation is extensive. For experienced analysts with complex experimental designs (e.g., multi-factor, interaction terms, repeated measures), **edgeR's** quasi-likelihood framework offers more flexibility.
+:::
+
+## Quality Control in R
+
+### Library Size
+
+```r
+library(ggplot2)
+
+libsize <- data.frame(
+  sample = colnames(dds),
+  reads = colSums(counts(dds))
+)
+
+ggplot(libsize, aes(x = sample, y = reads)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  labs(x = NULL, y = "Assigned reads")
+```
+
+### PCA
+
+Use transformed counts for PCA, clustering, and heatmaps. Do not use transformed counts for DESeq2 testing.
+
+```r
+vsd <- vst(dds, blind = FALSE)
+
+plotPCA(vsd, intgroup = c("condition", "batch"))
+```
+
+![A PCA plot made with ggplot2 from transformed RNA-seq counts. In a healthy experiment, biological replicates should usually be close together, and the main separation should match the experimental question.](../images/09-rnaseq-ggplot-pca.png){#fig-rnaseq-ggplot-pca fig-align="center" width="90%"}
+
+If samples separate by batch more strongly than condition, stop and investigate. Batch effects are not solved by hiding them in the plot.
+
+### Sample Distance Heatmap
+
+```r
+library(pheatmap)
+
+sample_dists <- dist(t(assay(vsd)))
+sample_dist_mat <- as.matrix(sample_dists)
+rownames(sample_dist_mat) <- colnames(vsd)
+colnames(sample_dist_mat) <- colnames(vsd)
+
+pheatmap(
+  sample_dist_mat,
+  clustering_distance_rows = sample_dists,
+  clustering_distance_cols = sample_dists
+)
+```
+
+![A ggplot2 sample-distance heatmap. Small distances indicate similar expression profiles; one sample far from all others may be an outlier or mislabeled sample.](../images/09-rnaseq-ggplot-sample-distance.png){#fig-rnaseq-ggplot-sample-distance fig-align="center" width="82%"}
+
+Replicates should usually cluster together. If one sample is far from every other sample, check its FastQC report, mapping rate, assigned-read percentage, metadata, and known experimental notes.
+
+## Visualization of Differential Expression
+
+### MA Plot
+
+```r
+plotMA(res, ylim = c(-5, 5))
+```
+
+An MA plot shows log2 fold change against average expression. Low-count genes naturally have noisier fold-change estimates. Shrinkage helps keep these estimates from dominating the plot.
+
+### Volcano Plot
+
+```r
+library(ggplot2)
+library(dplyr)
+
+res_tbl <- res_tbl |>
+  mutate(
+    significant = padj < 0.05 & abs(log2FoldChange) > 1
+  )
+
+ggplot(res_tbl, aes(x = log2FoldChange,
+  y = -log10(pvalue), color = significant)) +
+  geom_point(alpha = 0.55, size = 1.2, na.rm = TRUE) +
+  scale_color_manual(values = c("grey70", "firebrick")) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  theme_bw() +
+  labs(
+    x = "log2 fold change",
+    y = "-log10 p-value",
+    color = "Significant"
+  )
+```
+
+![A volcano plot made with ggplot2. Genes in the upper left and upper right combine large fold changes with small p-values, but final interpretation should use adjusted p-values and biological context.](../images/09-rnaseq-ggplot-volcano.png){#fig-rnaseq-ggplot-volcano fig-align="center" width="90%"}
+
+### Heatmap of Top Genes
+
+```r
+top_genes <- res_tbl |>
+  filter(!is.na(padj)) |>
+  slice_min(padj, n = 50) |>
+  pull(gene_id)
+
+mat <- assay(vsd)[top_genes, ]
+mat <- mat - rowMeans(mat)
+
+pheatmap(
+  mat,
+  annotation_col = as.data.frame(colData(vsd)[, c("condition", "batch")]),
+  show_rownames = FALSE
+)
+```
+
+Heatmaps are useful for checking whether the reported genes behave consistently across replicates. They are not proof by themselves; they are a diagnostic view of the normalized expression matrix.
+
+## Gene Annotation
+
+Many results are easier to interpret with gene symbols, descriptions, or Entrez IDs. For human data:
+
+```r
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+res_tbl$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys = res_tbl$gene_id,
+  keytype = "ENSEMBL",
+  column = "SYMBOL",
+  multiVals = "first"
+)
+
+res_tbl$entrez <- mapIds(
+  org.Hs.eg.db,
+  keys = res_tbl$gene_id,
+  keytype = "ENSEMBL",
+  column = "ENTREZID",
+  multiVals = "first"
+)
+```
+
+Always confirm the ID type. Ensembl gene IDs, Ensembl transcript IDs, Entrez IDs, and gene symbols are not interchangeable.
+
+## Functional Enrichment
+
+Once you have a list of genes, enrichment analysis asks whether biological categories are overrepresented. This is a downstream interpretation step, not a replacement for looking at the expression data.
+
+```r
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+sig_entrez <- res_tbl |>
+  filter(padj < 0.05, abs(log2FoldChange) > 1, !is.na(entrez)) |>
+  pull(entrez) |>
+  unique()
+
+ego <- enrichGO(
+  gene = sig_entrez,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+dotplot(ego, showCategory = 15)
+```
+
+Enrichment results depend on the background universe. A better background is the set of genes that passed filtering and could have been detected, not every gene in the genome.
+
+```r
+background <- res_tbl |>
+  filter(!is.na(padj), !is.na(entrez)) |>
+  pull(entrez) |>
+  unique()
+
+ego <- enrichGO(
+  gene = sig_entrez,
+  universe = background,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+```
+
+## Common Failure Modes
+
+| Symptom | Possible cause | First checks |
+|---|---|---|
+| Low mapping rate | Wrong organism, contamination, poor quality, adapters | FastQC, Kraken/FastQ Screen, reference version |
+| Low assigned reads | Wrong annotation, wrong strandedness, intronic reads | featureCounts summary, GTF chromosome names |
+| PCA separates by batch | Library prep or sequencing batch effect | Metadata, design formula, sample processing records |
+| One replicate is an outlier | Sample swap, failed library, contamination | MultiQC, mapping logs, sample distance heatmap |
+| Many mitochondrial/rRNA reads | RNA degradation or incomplete depletion | QC reports, biotype summaries |
+| No significant genes | Low power, weak effect, high variance, wrong contrast | Replicate count, dispersion plot, contrast direction |
+| Thousands of genes significant | Strong biology, confounding, normalization problem | MA plot, composition bias, sample metadata |
+
+## Reporting Checklist
+
+A reproducible RNA-seq report should include:
+
+1. Biological question and contrast.
+2. Sample sheet with sample IDs, conditions, batches, and replicate labels.
+3. Reference genome and annotation source with version.
+4. Tool names and versions.
+5. QC summary: read counts, mapping rates, assigned-read rates, outliers.
+6. Statistical design formula.
+7. Filtering rule for low-count genes.
+8. Differential expression contrast and threshold.
+9. PCA, sample distance heatmap, MA plot, volcano plot, and top-gene heatmap.
+10. A table of results with gene IDs, symbols, baseMean, log2 fold change, p-value, and adjusted p-value.
+
+## Workflow Managers
+
+The commands in this chapter are deliberately explicit so you can understand each step. For production work, use a workflow manager. The following chapters cover Nextflow, nf-core, and the `nf-core/rnaseq` community pipeline, which bundles QC, trimming, alignment or pseudoalignment, quantification, MultiQC reporting, and reproducibility metadata.
+
+Current `nf-core/rnaseq` usage expects a sample sheet whose first required columns are `sample`, `fastq_1`, `fastq_2`, and `strandedness`. The pipeline can infer strandedness when set to `auto`, but you should still review the strandedness checks in the MultiQC report.
+
+The goal is not to memorize every command, but to understand what each stage consumes and produces:
+
+```text
+FASTQ + sample sheet + reference
+  -> QC report
+  -> alignments or transcript quantifications
+  -> gene count matrix
+  -> normalized exploratory plots
+  -> differential expression table
+  -> biological interpretation
+```
+
+## Exercises
+
+1. Download a small public bulk RNA-seq dataset from SRA or recount3. Create a sample sheet with at least `sample` and `condition` columns.
+2. Run FastQC and MultiQC on the FASTQ files. Write a short paragraph describing the read length, read count differences, adapter content, and any quality concerns.
+3. Quantify the reads with Salmon and import the results into R with `tximport`. Then repeat with kallisto. Compare the estimated counts for the top 20 most expressed genes — how similar are they?
+4. Run DESeq2 with an appropriate design formula. Report the number of genes with `padj < 0.05`.
+5. Run the same analysis with edgeR. Compare the number of significant genes, the fold change correlation, and the overlap of the top 100 genes between the two methods.
+6. Make a PCA plot, sample distance heatmap, MA plot, volcano plot, and top-gene heatmap.
+7. Align the same data with both STAR and HISAT2. Compare alignment rates, junction detection, and memory usage. Count reads with featureCounts from both alignments and compare gene counts.
+8. Perform GO enrichment on upregulated genes and downregulated genes separately. Explain why the background gene universe matters.
+9. Inspect one highly significant gene in IGV using the STAR or HISAT2 BAM file. Does the read coverage support the statistical result?
+
+## Further Reading
+
+The Biostar Handbook's *RNA-Seq by Example* emphasizes confidence-building checks: understand the reference, understand the reads, create a design file, compare alignment and classification approaches, and inspect normalized expression before interpreting differential expression. Ming Tang's RNA-seq analysis notes collect many practical references on experimental design, QC, normalization assumptions, Salmon/kallisto, batch effects, and downstream enrichment. Together, they are useful companions for moving from this compact chapter to full project analysis.
+
+For current tool behavior, consult the official vignettes and documentation for [DESeq2](https://www.bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html), [edgeR](https://bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf), [tximport](https://bioconductor.org/packages/release/bioc/vignettes/tximport/inst/doc/tximport.html), [Salmon](https://salmon.readthedocs.io/en/latest/salmon.html), [kallisto](https://pachterlab.github.io/kallisto/manual), [STAR](https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf), [HISAT2](http://daehwankimlab.github.io/hisat2/manual/), [featureCounts](https://subread.sourceforge.net/featureCounts.html), [MultiQC](https://seqera.io/multiqc/), and [nf-core/rnaseq](https://nf-co.re/rnaseq/).

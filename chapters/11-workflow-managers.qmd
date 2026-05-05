@@ -1,0 +1,353 @@
+# Workflow Managers {#sec-workflow-managers}
+
+## The Bash Script Problem
+
+Every bioinformatics pipeline starts the same way — a bash script:
+
+```bash
+#!/bin/bash
+fastqc data/sample1.fastq.gz -o qc/
+trim_galore data/sample1.fastq.gz -o trimmed/
+bwa mem ref/genome.fa trimmed/sample1_trimmed.fq.gz \
+  | samtools sort -o aligned/sample1.bam
+samtools index aligned/sample1.bam
+```
+
+This works for one sample. Then the realities of genomics set in:
+
+- You have **50 samples**, not one. You copy-paste the script 50 times or write a loop.
+- The alignment step fails for sample 23 due to a corrupted FASTQ. You fix the file, but now you have to re-run the entire pipeline — including the 22 samples that already succeeded.
+- You move to the HPC cluster. Every path is different, Slurm needs `sbatch` wrappers, and tools are loaded via modules.
+- A collaborator tries to reproduce your analysis. Their `samtools` is version 1.13 instead of 1.20, and the output format has changed.
+- You discover a better trimming tool. Changing one step means manually tracing every downstream dependency.
+
+None of these problems are about biology. They are engineering problems — dependency management, parallelization, fault tolerance, and portability. This is exactly what workflow managers solve.
+
+## What a Workflow Manager Does
+
+A workflow manager automates the execution of multi-step analyses by handling:
+
+| Problem | How Workflow Managers Solve It |
+|---------|-------------------------------|
+| Manual dependency tracking | Automatically determine which steps depend on which |
+| Re-running everything after a failure | **Resume** from where it failed, skipping completed steps |
+| Processing many samples | **Parallelize** across samples automatically |
+| Running on different systems | **Configuration profiles** separate logic from infrastructure |
+| Software version conflicts | Native integration with **containers** (Docker, Apptainer) and **Conda** |
+| Undocumented analysis | Generate execution **reports**, DAG visualizations, and provenance logs |
+
+### The Directed Acyclic Graph (DAG)
+
+At its core, every workflow manager represents your pipeline as a **DAG** — a Directed Acyclic Graph. Each node is a task (run FastQC, align reads, call variants). Edges represent dependencies (alignment depends on trimming, which depends on raw data). The manager walks the graph, executing tasks in the correct order and parallelizing wherever possible.
+
+```
+    sample1.fastq.gz    sample2.fastq.gz    sample3.fastq.gz
+         │                    │                    │
+         ▼                    ▼                    ▼
+      FastQC               FastQC               FastQC
+         │                    │                    │
+         ▼                    ▼                    ▼
+    Trim Galore          Trim Galore          Trim Galore
+         │                    │                    │
+         ▼                    ▼                    ▼
+      BWA MEM              BWA MEM              BWA MEM
+         │                    │                    │
+         ▼                    ▼                    ▼
+   samtools sort        samtools sort        samtools sort
+         │                    │                    │
+         └────────────────────┼────────────────────┘
+                              ▼
+                           MultiQC
+```
+
+The three sample columns run **in parallel** — the manager recognizes they are independent. MultiQC waits for all three to finish because it depends on their combined output.
+
+## The Two Dominant Tools
+
+The bioinformatics community has largely converged on two workflow managers: **Snakemake** and **Nextflow**. Both are mature, widely used, well-documented, and actively developed. They solve the same problems but take fundamentally different approaches.
+
+### Snakemake: "Make for Bioinformatics"
+
+Snakemake was created in 2012 by Johannes Köster at the University of Düsseldorf. It extends the ideas of GNU Make (the classic build system) with Python syntax. Workflows are defined as a set of **rules**, each specifying input files, output files, and the command to produce the outputs from the inputs.
+
+Snakemake works **backward** from the desired output: you request a target file, and Snakemake traces the dependency chain back to the raw inputs, determining which rules need to run.
+
+```python
+# Snakemake: "I want sorted.bam — what rules produce it?"
+rule sort:
+    input:  "aligned/{sample}.bam"
+    output: "sorted/{sample}.sorted.bam"
+    shell:  "samtools sort {input} -o {output}"
+```
+
+### Nextflow: Dataflow Programming
+
+Nextflow was created in 2013 by Paolo Di Tommaso at the Centre for Genomic Regulation (CRG) in Barcelona. It uses a **dataflow** model: you define **processes** (tasks) and connect them with **channels** (data streams). Data flows forward through the pipeline, and Nextflow executes processes as soon as their input channels have data.
+
+```groovy
+// Nextflow: "When data arrives, run this process"
+process SORT {
+    input:  tuple val(sample), path(bam)
+    output: tuple val(sample), path("*.sorted.bam")
+    script: "samtools sort ${bam} -o ${sample}.sorted.bam"
+}
+```
+
+## Snakemake vs. Nextflow: A Detailed Comparison {#sec-comparison}
+
+### Design Philosophy
+
+| Aspect | Snakemake | Nextflow |
+|--------|-----------|----------|
+| **Paradigm** | File-based (pull model) | Dataflow (push model) |
+| **Execution logic** | Backward: "What do I need to produce this file?" | Forward: "Data arrived — run the next step" |
+| **Language** | Python-based DSL | Groovy-based DSL (JVM) |
+| **Learning curve for Python users** | Low — reads like Python | Moderate — Groovy/Java syntax is unfamiliar |
+
+### Syntax and Language
+
+Snakemake's greatest advantage for bioinformaticians is that it is built on **Python**. If you can write a Python script, you can write a Snakefile. Variables, list comprehensions, f-strings, and imports all work:
+
+```python
+# Snakemake — feels like Python
+import pandas as pd
+
+samples = pd.read_csv("samples.csv")
+SAMPLE_IDS = samples['sample_id'].tolist()
+
+rule all:
+    input:
+        expand("results/{sample}.bam", sample=SAMPLE_IDS)
+```
+
+Nextflow uses Groovy, which runs on the JVM. It is powerful but less familiar to most bioinformaticians:
+
+```groovy
+// Nextflow — Groovy syntax
+params.samples = "samples.csv"
+
+Channel.fromPath(params.samples)
+    .splitCsv(header: true)
+    .map { row -> [row.sample_id, file(row.fastq)] }
+    .set { reads_ch }
+```
+
+### Caching and Resuming
+
+Both managers support resuming after failure, but the mechanisms differ:
+
+| Feature | Snakemake | Nextflow |
+|---------|-----------|----------|
+| Cache unit | **Files** — checks if output files exist and are newer than inputs | **Task hashes** — checks if inputs, script, and container are unchanged |
+| Resume command | Automatic (only re-runs rules with missing/outdated outputs) | `-resume` flag required |
+| Cache location | Output files in the project directory | `work/` directory (separate from final outputs) |
+| Space overhead | Low (outputs are the cache) | Higher (`work/` duplicates data until cleaned) |
+
+### Container and Environment Support
+
+| Feature | Snakemake | Nextflow |
+|---------|-----------|----------|
+| Conda | Per-rule `conda:` directive | Via profile configuration |
+| Docker | `--sdm docker` / per-rule `container:` | Per-process `container` directive |
+| Apptainer/Singularity | `--sdm apptainer` / per-rule `container:` | Per-process `container` + profile |
+| Mixed environments | Different Conda env per rule — easy | Different container per process — easy |
+
+### Scalability and Execution
+
+| Feature | Snakemake | Nextflow |
+|---------|-----------|----------|
+| Local execution | Built-in | Built-in |
+| HPC (Slurm) | Executor plugin (`snakemake-executor-plugin-slurm`) | Built-in Slurm executor |
+| Cloud (AWS, GCP, Azure) | Supported via plugins | Native integration; strong AWS Batch support |
+| Job submission pattern | One Slurm job per rule instance | One Slurm job per process instance |
+| DAG scaling | Can struggle with very large DAGs (>100k jobs) | Handles large DAGs well via streaming dataflow |
+
+### Community Ecosystem
+
+| Feature | Snakemake | Nextflow |
+|---------|-----------|----------|
+| Pre-built pipelines | [Snakemake Workflow Catalog](https://snakemake.github.io/snakemake-workflow-catalog/) | [nf-core](https://nf-co.re/) (~100 production pipelines) |
+| Reusable components | [Snakemake Wrappers](https://snakemake-wrappers.readthedocs.io/) | nf-core modules |
+| Monitoring platform | Snakemake reports (HTML) | Seqera Platform (web dashboard) |
+| Community size | Large (academic) | Large (academic + industry) |
+| Primary user base | Academic labs, Python-centric teams | Genomics centers, clinical labs, industry |
+
+### Configuration and Portability
+
+| Feature | Snakemake | Nextflow |
+|---------|-----------|----------|
+| Config format | YAML config files + CLI flags | `nextflow.config` (Groovy) + YAML params files |
+| Profiles | Via `--profile` directory | Via `-profile` flag in config |
+| Separation of logic and execution | Config file for parameters; executor plugins for HPC | `nextflow.config` profiles for each environment |
+
+## When to Choose Which {#sec-when-to-choose}
+
+::: {.callout-note}
+## The Honest Answer
+
+Both tools are excellent. For most bioinformatics workflows, either will serve you well. The choice often comes down to your team's existing skills and what your community uses. Here are some guidelines:
+:::
+
+**Choose Snakemake when:**
+
+- Your team is Python-centric and you want minimal friction in learning
+- You are building custom analyses where Python scripting is deeply integrated
+- You want per-rule Conda environments (e.g., mixing tools that need different Python versions)
+- You are in an academic lab where flexibility and rapid prototyping matter more than production deployment
+- You prefer file-based reasoning ("I need this output file — what generates it?")
+
+**Choose Nextflow when:**
+
+- Your organization already uses nf-core pipelines (they are Nextflow-only)
+- You need strong cloud-native execution (AWS Batch, Google Cloud Life Sciences)
+- You are building production pipelines that will be maintained long-term by a team
+- You want a monitoring dashboard (Seqera Platform)
+- You need to handle complex data routing (branching, joining, fan-out/fan-in)
+- Your institute provides a Nextflow configuration profile
+
+**Choose either when:**
+
+- You are running standard genomics workflows (RNA-seq, variant calling, etc.)
+- You need HPC Slurm integration (both work well)
+- You need container support (both integrate with Docker and Apptainer/Singularity)
+- Reproducibility is a priority (both support versioned environments and containers)
+
+## Principles of Good Pipeline Design {#sec-shared-principles}
+
+Regardless of which tool you choose, the same design principles separate a robust, reproducible pipeline from a fragile script with extra steps. These principles apply equally to Snakemake and Nextflow.
+
+### Declare Dependencies, Don't Script Sequences
+
+A bash script says "do A, then B, then C." A workflow manager says "B needs the output of A, and C needs the output of B." This declarative approach lets the manager determine execution order, parallelize independent steps, and skip completed work.
+
+::: {.columns}
+::: {.column width="48%"}
+**Snakemake** — declare inputs and outputs:
+```python
+rule sort:
+    input:  "aligned/{sample}.bam"
+    output: "sorted/{sample}.sorted.bam"
+    shell:  "samtools sort {input} -o {output}"
+```
+:::
+::: {.column width="48%"}
+**Nextflow** — connect via channels:
+```groovy
+process SORT {
+    input:  tuple val(meta), path(bam)
+    output: tuple val(meta), path("*.sorted.bam")
+    script: "samtools sort ${bam} -o ${meta.id}.sorted.bam"
+}
+```
+:::
+:::
+
+### One Tool per Step
+
+Each rule or process should do one thing. A step that runs `bwa mem | samtools sort | samtools index` is three logical operations crammed into one — if sorting fails, the alignment (which succeeded) is lost. Splitting them lets the manager cache and retry each independently.
+
+### Isolate Software Environments
+
+Never rely on tools being globally installed. A pipeline that works because `samtools` happens to be on your `PATH` today will break when the system admin upgrades it next month. Both managers integrate with Conda and containers to lock tool versions:
+
+::: {.columns}
+::: {.column width="48%"}
+**Snakemake** — per-rule Conda env:
+```python
+rule sort:
+    input:  "aligned/{sample}.bam"
+    output: "sorted/{sample}.sorted.bam"
+    conda:  "envs/samtools.yaml"
+    shell:  "samtools sort {input} -o {output}"
+```
+:::
+::: {.column width="48%"}
+**Nextflow** — per-process container:
+```groovy
+process SORT {
+    container 'quay.io/biocontainers/samtools:1.20'
+    input:  tuple val(meta), path(bam)
+    output: tuple val(meta), path("*.sorted.bam")
+    script: "samtools sort ${bam} -o ${meta.id}.sorted.bam"
+}
+```
+:::
+:::
+
+### Separate Parameters from Logic
+
+Hardcoded paths and sample lists make a pipeline single-use. Configuration files make it reusable:
+
+::: {.columns}
+::: {.column width="48%"}
+**Snakemake** — `config.yaml`:
+```yaml
+samples: ["SRR001", "SRR002"]
+genome: "ref/GRCh38.fa"
+```
+```python
+configfile: "config/config.yaml"
+SAMPLES = config["samples"]
+```
+:::
+::: {.column width="48%"}
+**Nextflow** — `params.yml`:
+```yaml
+input: "samplesheet.csv"
+genome: "GRCh38"
+```
+```bash
+nextflow run main.nf -params-file params.yml
+```
+:::
+:::
+
+### Version Everything
+
+An analysis is only reproducible if you can recreate the exact environment. This means pinning:
+
+| What | Bad | Good |
+|------|-----|------|
+| Base image | `FROM ubuntu:latest` | `FROM ubuntu:22.04` |
+| Tool version | `conda install samtools` | `samtools=1.20` |
+| Pipeline version | `nextflow run nf-core/rnaseq` | `nextflow run nf-core/rnaseq -r 3.14.0` |
+| Wrapper version | `wrapper: "master/bio/fastqc"` | `wrapper: "v5.0.2/bio/fastqc"` |
+
+### Test Before You Submit
+
+Always preview what will run before committing cluster resources. A one-second dry run catches most problems — missing files, wildcard mismatches, configuration errors — before you waste hours of queue time.
+
+| Tool | Preview Command | What It Shows |
+|------|----------------|---------------|
+| Snakemake | `snakemake -n -r` | Which rules would run, and why |
+| Nextflow | `-profile test` with small data | Full pipeline execution on minimal input |
+
+::: {.callout-tip}
+## Pro-Tip: The 5-Minute Sanity Check
+
+Before any production run, go through this checklist:
+
+1. **Dry run** — does the manager see all inputs and plan the right steps?
+2. **Test run** — does the pipeline complete on a small subset (2–3 samples)?
+3. **Output spot-check** — do the test outputs look biologically reasonable?
+4. **Resource estimate** — based on test benchmarks, will the full run fit within your cluster allocation?
+
+This takes 5 minutes and prevents the most common pipeline disasters.
+:::
+
+## What Comes Next
+
+The rest of this week focuses on the tools used most directly in this course:
+
+- **Nextflow** (@sec-nextflow): processes, channels, configuration profiles, HPC/cloud execution, and custom pipeline development.
+- **nf-core** (@sec-nfcore): production-quality Nextflow pipelines built by the community.
+
+## Exercises
+
+1. **Conceptual.** Draw the DAG for a variant-calling pipeline with these steps: FastQC → Trim Galore → BWA MEM → samtools sort → samtools index → bcftools mpileup → bcftools call → bcftools filter. Which steps can run in parallel across samples? Which must wait for all samples to finish?
+
+2. **Philosophy comparison.** Explain the difference between Snakemake's "pull" model and Nextflow's "push" model in your own words. Given the DAG from exercise 1, walk through how each manager would determine the execution order.
+
+3. **Tool selection.** Your lab has three bioinformaticians who all write Python. You need to build a custom metagenomics pipeline that will run on your university's Slurm cluster. A colleague at another institute has offered to share their nf-core/ampliseq configuration. Discuss the trade-offs of (a) writing the pipeline in Snakemake vs. (b) adapting the Nextflow pipeline.
+
+4. **Reproducibility audit.** A colleague shares a pipeline as a bash script with 15 steps. List five specific reproducibility problems you would expect to find. For each problem, explain how a workflow manager (your choice of Snakemake or Nextflow) would solve it.

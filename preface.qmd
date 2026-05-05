@@ -1,0 +1,70 @@
+# Preface {.unnumbered}
+
+This is the course reader for *Bio196-22 Computing for Bioinformatics*. It is a focused
+six-week companion to a broader computing-skills reference, organized around the order
+in which students will need each tool during the course.
+
+The course focuses on the practical computing environment of modern bioinformatics:
+working at the Unix command line, editing text files, connecting to remote systems,
+running work on high-performance computing clusters, managing software environments,
+using containers, understanding sequencing workflows, running reproducible pipelines,
+and communicating analyses clearly.
+
+## Who This Book Is For
+
+This book is intended for:
+
+- Graduate students and researchers entering computational biology
+- Wet-lab biologists who want to analyze their own sequencing data
+- Programmers from other fields looking to apply their skills to the life sciences
+- HPC administrators and core-facility staff supporting bioinformatics users
+
+## What You Will Learn
+
+By the end of this course reader you will be comfortable with:
+
+- Navigating the Unix command line, manipulating files, and editing plain-text project files
+- Connecting to remote systems with SSH and submitting jobs to a Slurm cluster
+- Managing software with Conda and packaging tools with Docker and Apptainer/Singularity
+- Understanding next-generation sequencing data and the structure of RNA-seq analysis
+- Running reproducible workflows with Nextflow and community nf-core pipelines
+- Tracking work with Git and GitHub and producing reproducible reports with Quarto
+
+## Book Roadmap
+
+The chapters are organized by week.
+
+**Week 1: Linux Basics and Text Editing** builds the day-to-day foundation: the shell,
+file manipulation, text processing, and editing project files.
+
+**Week 2: SSH and High-Performance Computing** moves the work onto remote systems and
+introduces the scheduler-centered model of cluster computing.
+
+**Week 3: Conda and Containers** covers practical software management, from Conda
+environments to Docker and Apptainer/Singularity containers.
+
+**Week 4: NGS and RNA-seq** connects the computing tools to sequencing data and a
+standard RNA-seq analysis workflow.
+
+**Week 5: Nextflow and nf-core** scales single analyses into reproducible workflows and
+community-maintained pipelines, including nf-core/rnaseq.
+
+**Week 6: Version Control and Reproducible Reports** closes the course with Git, GitHub,
+and Quarto reports so analyses can be inspected, repeated, and shared.
+
+## How to Use This Book
+
+Each chapter includes explanations, worked examples, and exercises. Work through the
+chapters in order during the course, then return to specific chapters later as a
+reference when setting up projects or troubleshooting analyses.
+
+## Prerequisites
+
+No prior programming experience is assumed, though familiarity with basic biology
+concepts (genes, sequences, expression data) will be helpful when reading examples.
+
+---
+
+*Happy computing!*
+
+— Yucheng Zhang and Shirley Li, Tufts University

@@ -1,0 +1,836 @@
+# Nextflow {#sec-nextflow}
+
+## Why Workflow Managers?
+
+A typical RNA-seq analysis involves a dozen steps — quality control, trimming, alignment, sorting, indexing, quantification, normalization, and reporting. Strung together in a bash script, this works until it doesn't: one sample fails, and you must restart from scratch. You move to an HPC cluster and every path is different. A collaborator tries to reproduce your results and gets a different version of STAR.
+
+**Workflow managers** solve these problems systematically:
+
+| Problem with Bash Scripts | How Nextflow Solves It |
+|--------------------------|------------------------|
+| No resume after failure | `-resume` re-uses all completed tasks |
+| Manual parallelization | Automatic parallel execution across samples |
+| Hardcoded paths and tools | Configuration profiles separate logic from environment |
+| Runs on one system only | Same pipeline runs on laptop, Slurm, AWS, Google Cloud |
+| Software version conflicts | Native Docker, Apptainer/Singularity, and Conda integration |
+| No provenance tracking | Execution reports, timeline, and DAG generated automatically |
+| Scaling requires rewriting | Dataflow model scales from 1 sample to thousands |
+
+**Nextflow** is one of the dominant workflow managers in genomics. This chapter focuses on the Nextflow engine itself: how processes, channels, workflows, caching, configuration, and execution profiles work. The next chapter introduces **nf-core**, a community that builds production-quality pipelines on top of Nextflow.
+
+## Installing Nextflow
+
+Current Nextflow releases require Java 17 or later. Most HPC clusters provide Java through environment modules, and many laptops can install it with Conda or a system package manager.
+
+```bash
+# Check Java first
+java -version
+
+# Install Nextflow
+curl -s https://get.nextflow.io | bash
+
+# Move to a directory in your PATH
+mkdir -p ~/.local/bin
+mv nextflow ~/.local/bin/
+
+# Verify
+nextflow -version
+
+# Or install via Conda
+conda install -c bioconda nextflow
+```
+
+For teaching, the Conda installation is convenient. For production work, many groups install Nextflow directly and use containers for the analysis tools.
+
+::: {.callout-warning}
+## Do Not Run Production Pipelines Without Containers
+
+Nextflow can run processes using tools already installed on your `PATH`, but that is not recommended for reproducible bioinformatics. Use Docker, Apptainer, Singularity, Podman, Conda, or an institutional profile so that tool versions are controlled.
+:::
+
+::: {.callout-tip}
+## Pro-Tip: Set the Work Directory on HPC
+
+Nextflow stores intermediate files in a `work/` directory that can grow very large. On HPC clusters, point it to scratch storage:
+```bash
+export NXF_WORK=/scratch/$USER/nextflow_work
+
+# Or set it in nextflow.config:
+# workDir = '/scratch/user/nextflow_work'
+```
+:::
+
+## Current Best Practices
+
+These habits prevent most beginner mistakes:
+
+| Practice | Why it matters |
+|---|---|
+| Pin pipeline versions with `-r` when running remote pipelines | A later release may change tools, parameters, or output names. |
+| Run the test profile first | Confirms Nextflow, containers, network access, and executor settings. |
+| Use `-params-file` for project parameters | Keeps long commands readable and shareable. |
+| Use `-resume` after fixing a failed run | Reuses completed tasks instead of starting over. |
+| Put `work/` on scratch storage | Prevents large intermediate files from filling your home directory. |
+| Keep `pipeline_info/` outputs | They record software versions and execution metadata for methods sections. |
+| Prefer Apptainer/Singularity on HPC | They are designed for shared clusters where Docker is often unavailable. |
+
+## The Dataflow Programming Model
+
+Nextflow uses a **dataflow programming model**: you define **processes** (steps) and connect them with **channels** (data streams). Nextflow handles parallelization, scheduling, and dependencies automatically.
+
+The three building blocks are:
+
+1. **Processes** — self-contained tasks that execute a script (shell, Python, R, etc.)
+2. **Channels** — asynchronous queues that transport data between processes
+3. **Workflows** — the wiring that connects processes via channels
+
+## Processes
+
+A process is the fundamental unit of execution. It declares its inputs, outputs, resource requirements, and the script to run:
+
+```groovy
+process FASTQC {
+    tag "${meta.id}"                              // label in logs
+    label 'process_low'                           // resource preset
+    container 'biocontainers/fastqc:0.12.1'       // software container
+    publishDir "${params.outdir}/fastqc", mode: 'copy'  // copy outputs
+
+    input:
+    tuple val(meta), path(reads)
+
+    output:
+    tuple val(meta), path("*.html"), emit: html
+    tuple val(meta), path("*.zip"),  emit: zip
+
+    script:
+    """
+    fastqc --threads $task.cpus ${reads}
+    """
+}
+```
+
+### Input and Output Qualifiers
+
+| Qualifier | Purpose | Example |
+|-----------|---------|---------|
+| `val` | A value (string, number, map) | `val(sample_id)` |
+| `path` | File(s) staged into the work directory | `path(reads)` |
+| `tuple` | Grouped values | `tuple val(meta), path(reads)` |
+| `env` | Environment variable | `env(DB_PATH)` |
+| `each` | Repeat for every value (creates combinations) | `each path(genome)` |
+
+Named outputs with `emit` let you reference specific output channels:
+```groovy
+// In the workflow:
+FASTQC(reads_ch)
+FASTQC.out.html   // access the html output channel
+FASTQC.out.zip    // access the zip output channel
+```
+
+### Process Directives
+
+Directives control how a process is executed:
+
+```groovy
+process STAR_ALIGN {
+    cpus 12
+    memory '48 GB'
+    time '8h'
+    queue 'general'
+    container 'quay.io/biocontainers/star:2.7.11a'
+
+    // Dynamic resources that increase on retry
+    errorStrategy { task.exitStatus in [137, 140] ? 'retry' : 'terminate' }
+    maxRetries 3
+    memory { 32.GB * task.attempt }
+
+    // Use $task.cpus in the script — it matches the cpus directive
+    script:
+    """
+    STAR --runThreadN $task.cpus \
+         --genomeDir ${genome_index} \
+         --readFilesIn ${reads} \
+         --outSAMtype BAM SortedByCoordinate
+    """
+}
+```
+
+::: {.callout-note}
+## Error Strategy Options
+
+| Strategy | Behavior |
+|----------|----------|
+| `terminate` | Stop the entire pipeline immediately (default) |
+| `finish` | Let running tasks finish, then stop |
+| `ignore` | Skip failed tasks, continue the pipeline |
+| `retry` | Re-run the failed task (up to `maxRetries` times) |
+
+The `retry` strategy is particularly powerful when combined with dynamic resources — a task that fails with an out-of-memory error (exit code 137) can be automatically retried with double the memory.
+:::
+
+## Channels
+
+Channels are the data transport layer. They connect process outputs to process inputs and enable automatic parallelization.
+
+### Channel Factories
+
+```groovy
+// Single files by glob pattern
+channel.fromPath('data/samples/*.fastq.gz', checkIfExists: true)
+
+// Paired-end reads (the most common pattern in bioinformatics)
+channel.fromFilePairs('data/*_{1,2}.fastq.gz')
+// Emits: [sample_id, [sample_1.fastq.gz, sample_2.fastq.gz]]
+
+// Explicit values
+channel.of('GRCh38', 'GRCm39', 'TAIR10')
+
+// A single reusable value (not consumed after one read)
+channel.value(file('/references/genome.fa'))
+
+// Read a CSV samplesheet
+channel.fromPath('samplesheet.csv')
+    .splitCsv(header: true)
+    .map { row -> [row.sample, file(row.fastq_1), file(row.fastq_2)] }
+```
+
+::: {.callout-tip}
+## Pro-Tip: Always Use `checkIfExists: true`
+
+When creating file channels, always add `checkIfExists: true`. Without it, a typo in your file path silently produces an empty channel and nothing runs — with no error message:
+```groovy
+// Bad: silent failure if path is wrong
+channel.fromPath('data/*.fastq.gz')
+
+// Good: fails immediately with a clear error
+channel.fromPath('data/*.fastq.gz', checkIfExists: true)
+```
+:::
+
+### Key Channel Operators
+
+Operators transform, filter, and combine channels:
+
+```groovy
+// map: transform each element
+reads_ch
+    .map { id, files -> [[id: id, single_end: false], files] }
+
+// filter: keep elements matching a condition
+results_ch
+    .filter { meta, bam -> bam.size() > 0 }
+
+// collect: gather all items into a single list (for aggregation steps)
+bam_ch.collect()   // waits for all BAMs, then emits them as one list
+
+// groupTuple: group by a key (e.g., patient ID for multi-sample analysis)
+channel.of(['patient1', 'normal.bam'], ['patient1', 'tumor.bam'])
+    .groupTuple()
+// Emits: ['patient1', ['normal.bam', 'tumor.bam']]
+
+// join: combine channels by matching key (like a SQL inner join)
+aligned_ch.join(counts_ch)
+// Matches samples by their first element (the key)
+
+// mix: merge multiple channels
+fastqc_logs.mix(trim_logs, align_logs)
+// Used to feed all QC logs into MultiQC
+
+// combine: Cartesian product
+samples_ch.combine(references_ch)
+// Every sample paired with every reference
+
+// branch: route items to different channels
+reads_ch.branch {
+    single_end: it[0].single_end
+    paired_end: !it[0].single_end
+}
+```
+
+## Workflows
+
+The workflow block wires processes together:
+
+```groovy
+workflow {
+    // Create input channels
+    reads_ch = channel.fromFilePairs(params.reads, checkIfExists: true)
+        .map { id, files -> [[id: id, single_end: false], files] }
+
+    genome_ch = channel.value(file(params.genome))
+
+    // Connect processes — Nextflow infers the execution
+    // order from data dependencies
+    FASTQC(reads_ch)
+    TRIM_GALORE(reads_ch)
+    STAR_ALIGN(TRIM_GALORE.out.trimmed_reads, genome_ch)
+    FEATURECOUNTS(STAR_ALIGN.out.bam, channel.value(file(params.gtf)))
+
+    // Aggregate all QC logs for MultiQC
+    MULTIQC(
+        FASTQC.out.zip
+            .mix(TRIM_GALORE.out.log, STAR_ALIGN.out.log)
+            .collect()
+    )
+}
+```
+
+Named workflows can be reused as subworkflows:
+
+```groovy
+workflow ALIGNMENT {
+    take:
+    reads
+    genome_index
+
+    main:
+    TRIM_GALORE(reads)
+    STAR_ALIGN(TRIM_GALORE.out.trimmed_reads, genome_index)
+
+    emit:
+    bam  = STAR_ALIGN.out.bam
+    logs = STAR_ALIGN.out.log
+}
+
+// Call from the main workflow:
+workflow {
+    ALIGNMENT(reads_ch, genome_ch)
+    FEATURECOUNTS(ALIGNMENT.out.bam, gtf_ch)
+}
+```
+
+## Resume and Caching
+
+Nextflow's `-resume` flag is one of its most powerful features. When a pipeline fails partway through, fix the problem and re-run with `-resume` — Nextflow skips all tasks that already completed successfully and only re-runs what is needed.
+
+![Left: the first run executes every process. Right: after fixing a bug in ALIGN and re-running with -resume, FASTQC and TRIM are skipped (cached), and only ALIGN and downstream steps are re-run.](../images/14-nextflow-resume.png){fig-align="center" width="92%"}
+
+```bash
+# First run — fails at STAR_ALIGN due to a parameter error
+nextflow run main.nf -profile apptainer
+
+# Fix the parameter, re-run — FASTQC and TRIM results are cached
+nextflow run main.nf -profile apptainer -resume
+```
+
+**How caching works**: Each task gets a unique hash based on its inputs, script, container, and environment. If nothing changed, the cached result is reused. The `work/` directory stores all intermediate results.
+
+::: {.callout-warning}
+## Clean Up the Work Directory
+
+The `work/` directory accumulates data from every run and can grow very large. After a pipeline completes successfully, clean it:
+```bash
+# Preview what would be deleted
+nextflow clean -n
+
+# Delete work files from the last run
+nextflow clean -f
+
+# Delete all but the most recent run
+nextflow clean -f -before last
+```
+:::
+
+## Configuration
+
+Nextflow separates pipeline logic from execution settings through configuration files. This is what makes the same pipeline portable across laptop, HPC, and cloud.
+
+### The `nextflow.config` File
+
+Use `nextflow.config` for execution settings: containers, executors, queues, default resources, and profiles. Use a separate YAML or JSON file with `-params-file` for project-specific analysis parameters such as sample sheets, genomes, and output directories.
+
+```groovy
+// Parameters
+params {
+    input   = null
+    outdir  = 'results'
+    genome  = 'GRCh38'
+}
+
+// Default process settings
+process {
+    cpus   = 2
+    memory = '8 GB'
+    time   = '4h'
+}
+
+// Profiles — activate with -profile <name>
+profiles {
+    docker {
+        docker.enabled = true
+    }
+
+    apptainer {
+        apptainer.enabled    = true
+        apptainer.autoMounts = true
+    }
+
+    singularity {
+        singularity.enabled    = true
+        singularity.autoMounts = true
+    }
+
+    slurm {
+        process.executor = 'slurm'
+        process.queue    = 'general'
+        executor {
+            queueSize       = 100
+            submitRateLimit = '10/1min'
+        }
+    }
+
+    test {
+        params.input  = 'test_data/samplesheet.csv'
+        params.outdir = 'test_results'
+        params.max_cpus   = 2
+        params.max_memory = '6.GB'
+        params.max_time   = '1.h'
+    }
+}
+
+// Execution reports (always enable these)
+report.enabled   = true
+timeline.enabled = true
+trace.enabled    = true
+dag.enabled      = true
+```
+
+### Process Selectors
+
+Override resources for specific processes using labels or names:
+
+```groovy
+process {
+    withLabel: 'process_low' {
+        cpus   = 2
+        memory = '4 GB'
+        time   = '2h'
+    }
+    withLabel: 'process_high' {
+        cpus   = 16
+        memory = '64 GB'
+        time   = '24h'
+    }
+    withName: 'STAR_ALIGN' {
+        cpus   = 12
+        memory = '48 GB'
+    }
+}
+```
+
+For any reusable pipeline, prefer a parameter file like this:
+
+```yaml
+input: "samplesheet.csv"
+outdir: "results"
+genome: "GRCh38"
+reads: "data/*_{1,2}.fastq.gz"
+reference: "references/genome.fa"
+```
+
+Run it with:
+
+```bash
+nextflow run main.nf \
+  -profile test,docker \
+  -params-file params.yml
+```
+
+This separation is easier to teach, easier to review, and safer to reuse.
+
+### HPC Configuration (Slurm + Apptainer or Singularity)
+
+A complete configuration for running Nextflow on a Slurm HPC cluster:
+
+```groovy
+// nextflow.config for HPC
+params {
+    max_memory = '384.GB'
+    max_cpus   = 48
+    max_time   = '168.h'
+}
+
+process {
+    executor = 'slurm'
+    queue    = 'general'
+
+    // Dynamic resources with retry scaling
+    errorStrategy = {
+        task.exitStatus in [104,134,137,139,140,143]
+            ? 'retry' : 'finish'
+    }
+    maxRetries    = 2
+    cpus          = { 2 * task.attempt }
+    memory        = { 8.GB * task.attempt }
+    time          = { 4.h * task.attempt }
+
+    withLabel: 'process_high' {
+        cpus   = 16
+        memory = { 64.GB * task.attempt }
+        time   = '24h'
+        queue  = 'largemem'
+    }
+}
+
+apptainer {
+    enabled    = true
+    autoMounts = true
+    cacheDir   = '/shared/apptainer_cache'
+}
+
+// Use singularity instead if that is what your cluster provides.
+singularity {
+    enabled    = true
+    autoMounts = true
+    cacheDir   = '/shared/singularity_cache'
+}
+
+executor {
+    queueSize       = 100
+    submitRateLimit = '10/1min'
+    pollInterval    = '30 sec'
+}
+```
+
+::: {.callout-tip}
+## Pro-Tip: Share the Container Cache
+
+On an HPC cluster, set a shared cache directory so container images are downloaded once and reused by all lab members:
+```bash
+export NXF_APPTAINER_CACHEDIR=/project/mylab/apptainer_cache
+export NXF_SINGULARITY_CACHEDIR=/project/mylab/singularity_cache
+```
+:::
+
+### Running with Profiles
+
+Profiles are combined at the command line:
+
+```bash
+# Local machine with Docker
+nextflow run main.nf -profile docker
+
+# HPC with Apptainer or Singularity and Slurm
+nextflow run main.nf -profile apptainer,slurm
+nextflow run main.nf -profile singularity,slurm
+
+# Test with small dataset
+nextflow run main.nf -profile test,docker
+```
+
+Profile order matters. Later profiles can override settings from earlier profiles. For example, `-profile test,docker` applies the test data and then enables Docker.
+
+## Writing a Custom Pipeline
+
+When no existing pipeline matches your needs, you can write your own. Here is a minimal but complete custom pipeline:
+
+**Project structure:**
+```
+my_pipeline/
+  main.nf
+  nextflow.config
+  modules/
+    local/
+      fastqc.nf
+      trim_galore.nf
+      bwa_mem.nf
+```
+
+**`main.nf`:**
+
+```groovy
+#!/usr/bin/env nextflow
+
+// Import local modules
+include { FASTQC }      from './modules/local/fastqc'
+include { TRIM_GALORE } from './modules/local/trim_galore'
+include { BWA_MEM }     from './modules/local/bwa_mem'
+
+// Log pipeline info
+log.info """
+    ===========================
+    MY ALIGNMENT PIPELINE
+    ===========================
+    reads  : ${params.reads}
+    genome : ${params.genome}
+    outdir : ${params.outdir}
+    """.stripIndent()
+
+workflow {
+    // Create channel from paired-end reads
+    reads_ch = Channel
+        .fromFilePairs(params.reads, checkIfExists: true)
+        .map { id, files -> [[id: id, single_end: false], files] }
+
+    genome_ch = Channel.value(file(params.genome, checkIfExists: true))
+
+    // QC on raw reads
+    FASTQC(reads_ch)
+
+    // Trim adapters
+    TRIM_GALORE(reads_ch)
+
+    // Align to reference genome
+    BWA_MEM(TRIM_GALORE.out.trimmed_reads, genome_ch)
+}
+```
+
+**`modules/local/fastqc.nf`:**
+
+```groovy
+process FASTQC {
+    tag "${meta.id}"
+    label 'process_low'
+    container 'biocontainers/fastqc:0.12.1'
+    publishDir "${params.outdir}/fastqc", mode: 'copy'
+
+    input:
+    tuple val(meta), path(reads)
+
+    output:
+    tuple val(meta), path("*.html"), emit: html
+    tuple val(meta), path("*.zip"),  emit: zip
+
+    script:
+    """
+    fastqc --threads $task.cpus ${reads}
+    """
+}
+```
+
+**`modules/local/trim_galore.nf`:**
+
+```groovy
+process TRIM_GALORE {
+    tag "${meta.id}"
+    label 'process_medium'
+    container 'quay.io/biocontainers/trim-galore:0.6.10'
+    publishDir "${params.outdir}/trimmed", mode: 'copy'
+
+    input:
+    tuple val(meta), path(reads)
+
+    output:
+    tuple val(meta), path("*_val_{1,2}.fq.gz"), emit: trimmed_reads
+    tuple val(meta), path("*_trimming_report.txt"), emit: log
+
+    script:
+    """
+    trim_galore --paired --cores $task.cpus \
+        ${reads[0]} ${reads[1]}
+    """
+}
+```
+
+**`modules/local/bwa_mem.nf`:**
+
+```groovy
+process BWA_MEM {
+    tag "${meta.id}"
+    label 'process_high'
+    container 'biocontainers/mulled-v2-' +
+        'fe8faa35dbf6dc65a0f7f5d4ea12e31a79f73e40:' +
+        'a34558545ae1413d94bde4578787ebef08027945-0'
+    publishDir "${params.outdir}/aligned", mode: 'copy'
+
+    input:
+    tuple val(meta), path(reads)
+    path genome
+
+    output:
+    tuple val(meta), path("*.sorted.bam"),     emit: bam
+    tuple val(meta), path("*.sorted.bam.bai"), emit: bai
+
+    script:
+    def prefix = "${meta.id}"
+    """
+    bwa mem -t $task.cpus ${genome} ${reads[0]} ${reads[1]} \
+        | samtools sort -@ $task.cpus -o ${prefix}.sorted.bam -
+    samtools index ${prefix}.sorted.bam
+    """
+}
+```
+
+**`nextflow.config`:**
+
+```groovy
+params {
+    reads  = 'data/*_{1,2}.fastq.gz'
+    genome = '/references/genome.fa'
+    outdir = 'results'
+}
+
+process {
+    withLabel: 'process_low'    { cpus = 2;  memory = '4 GB';  time = '1h' }
+    withLabel: 'process_medium' { cpus = 4;  memory = '8 GB';  time = '4h' }
+    withLabel: 'process_high'   { cpus = 8;  memory = '32 GB'; time = '8h' }
+}
+
+profiles {
+    docker      { docker.enabled = true }
+    apptainer   { apptainer.enabled = true; apptainer.autoMounts = true }
+    singularity { singularity.enabled = true; singularity.autoMounts = true }
+    slurm       { process.executor = 'slurm'; process.queue = 'general' }
+    test {
+        params.reads  = 'test_data/*_{1,2}.fastq.gz'
+        params.outdir = 'test_results'
+    }
+}
+
+report.enabled   = true
+timeline.enabled = true
+trace.enabled    = true
+```
+
+Run it:
+```bash
+# Local with Docker
+nextflow run main.nf -profile docker
+
+# HPC with Slurm + Apptainer or Singularity
+nextflow run main.nf -profile apptainer,slurm
+nextflow run main.nf -profile singularity,slurm
+
+# Resume after failure
+nextflow run main.nf -profile apptainer,slurm -resume
+```
+
+## Groovy Essentials for Nextflow
+
+Nextflow uses Groovy syntax. You do not need to learn Groovy in depth — just a few patterns:
+
+### String Interpolation
+
+```groovy
+// Double quotes: variables are interpolated
+"Sample: ${meta.id}, CPUs: $task.cpus"
+
+// Single quotes: literal (no interpolation — use for bash variables)
+'echo "User is $USER"'
+```
+
+In process scripts, use **double-quoted** strings for Nextflow variables (`$task.cpus`, `${meta.id}`) and **escape** bash variables with `\$`:
+
+```groovy
+script:
+"""
+echo "Running on \$HOSTNAME with $task.cpus cores"
+bwa mem -t $task.cpus ${genome} ${reads}
+"""
+```
+
+### Closures
+
+Closures are anonymous functions — the core of channel operations:
+
+```groovy
+// Explicit parameter
+.map { sample -> sample.toUpperCase() }
+
+// Destructuring tuples
+.map { meta, reads -> [meta.id, reads] }
+
+// Implicit 'it' parameter (for single-argument closures)
+.filter { it.size() > 0 }
+```
+
+### The Ternary Operator and Elvis Operator
+
+```groovy
+// Ternary: condition ? if_true : if_false
+def mode = params.single_end ? 'SE' : 'PE'
+
+// Elvis: use default if null
+def genome = params.genome ?: 'GRCh38'
+```
+
+## Monitoring with Seqera Platform
+
+Seqera Platform (formerly Nextflow Tower) provides a web interface for monitoring pipeline runs in real time. It tracks task status, resource usage, and costs.
+
+```bash
+# Enable monitoring (requires a free account at cloud.seqera.io)
+export TOWER_ACCESS_TOKEN=<your_token>
+nextflow run main.nf \
+    -profile apptainer \
+    -with-tower
+```
+
+The free tier is sufficient for individual researchers. For HPC centers, Seqera offers enterprise deployment.
+
+## Quick Reference
+
+### Essential Nextflow Commands
+
+```bash
+# Run a pipeline
+nextflow run main.nf                              # local run
+nextflow run main.nf -resume                       # resume from cache
+nextflow run main.nf -profile apptainer,slurm      # with profiles
+nextflow run main.nf -params-file params.yaml      # from params file
+
+# Pipeline info and history
+nextflow log                                       # execution history
+nextflow log last -f 'name,status,duration'        # last run details
+nextflow config -profile slurm                     # resolved config
+
+# Maintenance
+nextflow clean -f                                  # delete work files
+```
+
+### Key Nextflow Flags
+
+| Flag | Purpose |
+|------|---------|
+| `-resume` | Re-use cached results |
+| `-profile` | Activate configuration profiles |
+| `-r` | Pipeline version/tag |
+| `-c` | Additional config file |
+| `-params-file` | YAML/JSON parameter file |
+| `-w` | Work directory path |
+| `-with-report` | Generate HTML execution report |
+| `-with-timeline` | Generate timeline visualization |
+| `-with-tower` | Monitor via Seqera Platform |
+| `-with-dag` | Generate pipeline DAG |
+
+### Single vs. Double Dash
+
+```bash
+# Single dash: Nextflow engine flags
+nextflow run main.nf -resume -profile docker -r 3.24.0
+
+# Double dash: pipeline parameters
+nextflow run main.nf --input samplesheet.csv --outdir results --genome GRCh38
+```
+
+## Summary
+
+Nextflow provides the execution engine for reproducible bioinformatics:
+
+- **Nextflow** handles parallelization, caching, container integration, and portability across laptop, HPC, and cloud
+- **`-resume`** is transformative — fix a bug and re-run without losing hours of completed work
+- Always **test first** with a small dataset or a `test` profile
+- **Profiles** separate pipeline logic from execution environment -- the same pipeline runs unchanged on Docker, Apptainer/Singularity, Slurm, or AWS
+- For custom needs, write your own pipeline using the **process-channel-workflow** model
+
+## Further Reading
+
+Use the official documentation for current behavior:
+
+1. Nextflow installation: <https://www.nextflow.io/docs/latest/install.html>
+2. Nextflow configuration: <https://www.nextflow.io/docs/latest/config.html>
+3. Nextflow cache and resume: <https://www.nextflow.io/docs/latest/cache-and-resume.html>
+4. Nextflow processes: <https://www.nextflow.io/docs/latest/process.html>
+5. Nextflow workflows: <https://www.nextflow.io/docs/latest/workflow.html>
+
+## Exercises
+
+1. Install Nextflow and verify it runs: `nextflow run hello`. What does this pipeline do?
+
+2. Write a minimal Nextflow pipeline (`main.nf`) with a single process that runs `wc -l` on each file in a channel created by `Channel.fromPath('data/*.txt')`. Use `publishDir` to copy the results.
+
+3. Add a second process to your pipeline from Exercise 2 that collects all word count outputs and concatenates them into a single summary file. Use the `.collect()` operator.
+
+4. Create a `nextflow.config` with profiles for `docker`, `apptainer`, and `slurm`. Set appropriate executor, container, and resource defaults for each.
+
+5. Run your pipeline from Exercise 2-3, then intentionally break the second process by introducing a typo in the script. Fix it and re-run with `-resume`. Verify that the first process was cached and not re-executed.

@@ -1,0 +1,317 @@
+# nf-core {#sec-nfcore}
+
+## What Is nf-core?
+
+**nf-core** is a community collection of ready-to-use bioinformatics pipelines. Each pipeline is written in Nextflow, tested by the community, documented on the nf-core website, and released with version numbers.
+
+The relationship works like this:
+
+- **Nextflow** is the engine that runs a workflow.
+- **nf-core** is a curated collection of workflows that already solve common analysis problems.
+- **nf-core/rnaseq** is one specific nf-core pipeline for RNA-seq.
+
+![The nf-core ecosystem provides curated pipelines, shared modules, community-maintained container images, institutional HPC configurations, and a testing framework -- all built on Nextflow.](../images/14-nfcore-ecosystem.png){fig-align="center" width="92%"}
+
+For many biologists, nf-core is the most practical entry point to reproducible pipelines. You do not need to write a Nextflow pipeline from scratch to get started. The main requirements are preparing a correct input table, choosing the right parameters, running a test, and reviewing the output reports.
+
+## Why Use nf-core?
+
+nf-core pipelines are useful because they package many best practices together:
+
+| nf-core feature | Why it helps |
+|---|---|
+| Versioned releases | You can report exactly which pipeline version was used. |
+| Built-in test data | You can check whether your computer or cluster is configured correctly. |
+| Container support | Tool versions are controlled with Docker, Apptainer, Singularity, or Conda. |
+| Parameter validation | The pipeline catches many spelling mistakes and missing values before running. |
+| Standard output folders | Results are easier to find and compare across projects. |
+| MultiQC reports | Many quality-control results are collected into one HTML report. |
+| Community documentation | Each pipeline has a web page explaining inputs, parameters, and outputs. |
+
+This does not mean nf-core pipelines are magic. They still require good experimental design, correct sample labels, suitable reference genomes, and careful interpretation. nf-core makes the computational steps more reproducible; it does not replace biological judgment.
+
+## Common nf-core Pipelines
+
+nf-core contains pipelines for many types of sequencing data. The exact catalog changes over time, so use the nf-core website or `nf-core list` for the current list.
+
+| Pipeline | Data type | Typical use |
+|---|---|---|
+| `nf-core/rnaseq` | Bulk RNA-seq | Read QC, trimming, alignment or pseudoalignment, quantification, and MultiQC |
+| `nf-core/sarek` | WGS/WES variants | Germline and somatic variant calling |
+| `nf-core/fetchngs` | Public accessions | Download FASTQ files from SRA/ENA/DDBJ and create samplesheets |
+| `nf-core/ampliseq` | Amplicon sequencing | 16S, 18S, ITS, and other marker-gene analyses |
+| `nf-core/taxprofiler` | Metagenomics | Taxonomic profiling with tools such as Kraken2 and MetaPhlAn |
+| `nf-core/chipseq` | ChIP-seq | Read processing, peak calling, and QC |
+| `nf-core/atacseq` | ATAC-seq | Chromatin accessibility analysis |
+| `nf-core/scrnaseq` | Single-cell RNA-seq | Processing single-cell and single-nucleus RNA-seq data |
+| `nf-core/methylseq` | Bisulfite sequencing | DNA methylation analysis |
+
+The safest habit is to start at the pipeline web page, read the usage page, and then run the built-in test profile before using your own data.
+
+## Installing nf-core Tools
+
+You can run nf-core pipelines with Nextflow alone:
+
+```bash
+nextflow run nf-core/rnaseq -r 3.24.0 \
+    -profile test,docker --outdir test_results
+```
+
+The separate `nf-core` command-line tool is helpful for browsing, launching, downloading, and checking pipelines:
+
+```bash
+# Install with Conda
+conda install -c bioconda nf-core
+
+# Or install with pip
+pip install nf-core
+
+# List available pipelines
+nf-core list
+
+# Open an interactive helper that writes a parameter file
+nf-core launch rnaseq
+
+# Download a pipeline and its containers for offline or HPC use
+nf-core pipelines download rnaseq -r 3.24.0 --container-system singularity
+```
+
+On a shared HPC cluster, ask your bioinformatics or HPC support team which installation method and container profile they recommend. Many clusters prefer Apptainer or Singularity rather than Docker.
+
+## The Standard Run Pattern
+
+Most nf-core runs follow the same shape:
+
+```bash
+nextflow run nf-core/<pipeline> \
+    -r <pipeline_version> \
+    -profile <container_or_institution_profile> \
+    --input samplesheet.csv \
+    --outdir results \
+    -resume
+```
+
+The single-dash options are for Nextflow itself:
+
+| Option | Meaning |
+|---|---|
+| `-r` | Use a specific pipeline release. |
+| `-profile` | Choose an execution environment, such as Docker, Apptainer, Singularity, or an institutional profile. |
+| `-resume` | Reuse completed tasks if the run is restarted. |
+| `-params-file` | Read pipeline parameters from a YAML or JSON file. |
+| `-with-report` | Write an HTML execution report. |
+| `-with-timeline` | Write a timeline showing how long tasks took. |
+
+The double-dash options are parameters for the pipeline:
+
+| Option | Meaning |
+|---|---|
+| `--input` | The sample sheet or input file for the pipeline. |
+| `--outdir` | The folder where final results will be copied. |
+| `--genome` | A named reference genome, when supported by the pipeline. |
+| `--fasta` | A custom genome FASTA file. |
+| `--gtf` | A custom gene annotation file, often used with RNA-seq. |
+| `--email` | Send a completion email, if the system is configured for it. |
+
+::: {.callout-important}
+## Always Pin the Pipeline Version
+
+Always use `-r` with a specific release:
+
+```bash
+# Avoid this for real projects
+nextflow run nf-core/rnaseq --input samplesheet.csv --outdir results
+
+# Prefer this
+nextflow run nf-core/rnaseq -r 3.24.0 \
+    --input samplesheet.csv --outdir results
+```
+
+Without `-r`, a later run may use a newer pipeline release with changed tools, defaults, parameters, or output names.
+:::
+
+## Run the Test Profile First
+
+Every nf-core pipeline has a small built-in test dataset. The test run answers a simple question: "Can this computer or cluster run this pipeline at all?"
+
+For example:
+
+```bash
+nextflow run nf-core/rnaseq \
+    -r 3.24.0 \
+    -profile test,docker \
+    --outdir test_results
+```
+
+If you are on an HPC cluster, the profile may look like this:
+
+```bash
+nextflow run nf-core/rnaseq \
+    -r 3.24.0 \
+    -profile test,apptainer \
+    --outdir test_results
+```
+
+If the test succeeds, then Nextflow, the pipeline download, containers, and the basic execution environment are working. If the test fails, fix the environment before using real data.
+
+## Use a Parameter File
+
+Long commands become hard to read. A parameter file keeps project settings in one place.
+
+Example `params.yaml`:
+
+```yaml
+input: "samplesheet.csv"
+outdir: "results"
+genome: "GRCh38"
+aligner: "star_salmon"
+trimmer: "fastp"
+save_reference: true
+```
+
+Run with:
+
+```bash
+nextflow run nf-core/rnaseq \
+    -r 3.24.0 \
+    -profile apptainer \
+    -params-file params.yaml \
+    -resume
+```
+
+This is easier to share with collaborators than a very long command copied from a terminal.
+
+## Preparing Inputs
+
+Most nf-core pipelines use a **samplesheet**. A samplesheet is a table, usually a CSV file, where each row describes one sample or one sequencing library.
+
+For RNA-seq, a simple paired-end samplesheet looks like this:
+
+```csv
+sample,fastq_1,fastq_2,strandedness
+CONTROL_REP1,/data/raw/CTRL1_R1.fastq.gz,/data/raw/CTRL1_R2.fastq.gz,auto
+CONTROL_REP2,/data/raw/CTRL2_R1.fastq.gz,/data/raw/CTRL2_R2.fastq.gz,auto
+TREATED_REP1,/data/raw/TREAT1_R1.fastq.gz,/data/raw/TREAT1_R2.fastq.gz,auto
+TREATED_REP2,/data/raw/TREAT2_R1.fastq.gz,/data/raw/TREAT2_R2.fastq.gz,auto
+```
+
+Good samplesheets follow a few rules:
+
+- Use clear sample names such as `CONTROL_REP1`, not `sample1`.
+- Use full paths to FASTQ files on shared clusters.
+- Keep biological replicate names separate.
+- Check that every FASTQ path exists before launching the full run.
+- Read the pipeline documentation because each pipeline has its own required columns.
+
+Rows with the same sample name may be treated as technical replicates in some pipelines. That can be useful, but it also means sample names must be chosen carefully.
+
+## Reading Outputs
+
+nf-core pipelines usually write results into the folder you set with `--outdir`. The exact folder names depend on the pipeline, but many runs include these outputs:
+
+| Output | What to check |
+|---|---|
+| `multiqc/multiqc_report.html` | The first report to open. It summarizes quality control across tools and samples. |
+| `pipeline_info/` | Software versions, run reports, trace files, and execution metadata. Keep this folder. |
+| Tool-specific folders | Results from aligners, quantifiers, variant callers, or other analysis tools. |
+| Merged result tables | Count matrices, variant tables, abundance tables, or other final analysis files. |
+
+For biologists, the most important first step is usually to open the MultiQC report. Look for failed samples, low read quality, adapter contamination, low mapping rate, unexpected strandedness, or large differences between samples.
+
+## Downloading Public Data
+
+`nf-core/fetchngs` can download public sequencing data and create samplesheets for other pipelines.
+
+Create a text file called `accessions.csv`:
+
+```text
+SRR1234567
+SRR1234568
+SRR1234569
+```
+
+Run:
+
+```bash
+nextflow run nf-core/fetchngs \
+    -r 1.12.0 \
+    -profile apptainer \
+    --input accessions.csv \
+    --outdir downloaded_data
+```
+
+The output includes downloaded FASTQ files and a generated samplesheet that can often be used as a starting point for another nf-core pipeline.
+
+## Institutional Profiles
+
+Some HPC centers have ready-made nf-core configuration profiles. These profiles can set the queue system, container engine, file paths, and resource limits for that institution.
+
+```bash
+nextflow run nf-core/rnaseq \
+    -r 3.24.0 \
+    -profile tufts \
+    --input samplesheet.csv \
+    --outdir results
+```
+
+If your institution has a profile, use it. If not, ask your local support team whether they have an internal Nextflow configuration file.
+
+## nf-core Modules
+
+nf-core pipelines are built from reusable pieces called **modules**. A module usually wraps one command-line tool, such as FastQC, STAR, Salmon, or MultiQC.
+
+You do not need to understand modules to run a standard nf-core pipeline. Modules matter more when you are developing pipelines or customizing workflows.
+
+A module normally includes:
+
+- A Nextflow process definition
+- A Conda environment file
+- Container links for Docker and Apptainer/Singularity
+- A small test dataset
+- Version reporting
+- Standardized input and output conventions
+
+nf-core modules commonly pass sample information using a `meta` map. For example, `meta.id` stores the sample name. This convention helps modules connect to each other without rewriting file names at every step.
+
+## A Practical Checklist
+
+Before a real nf-core run:
+
+1. Find the correct pipeline on the nf-core website.
+2. Read the pipeline usage page.
+3. Choose and record the pipeline version.
+4. Run the `test` profile.
+5. Prepare the samplesheet carefully.
+6. Put project parameters in a YAML file.
+7. Use containers through Docker, Apptainer, or Singularity.
+8. Run with `-resume`.
+9. Open the MultiQC report first.
+10. Keep `pipeline_info/` for reproducibility and methods writing.
+
+## Summary
+
+nf-core turns Nextflow into a practical analysis ecosystem for common bioinformatics projects. Instead of writing every workflow from scratch, you can run community-maintained pipelines with versioned releases, test data, containers, documentation, and standard reports.
+
+The next chapter uses these ideas for one important example: `nf-core/rnaseq`.
+
+## Further Reading
+
+Use the official nf-core documentation for current behavior:
+
+1. nf-core website: <https://nf-co.re/>
+2. nf-core pipeline catalog: <https://nf-co.re/pipelines>
+3. nf-core running pipelines: <https://nf-co.re/docs/usage/getting_started/running_pipelines>
+4. nf-core tools documentation: <https://nf-co.re/docs/nf-core-tools>
+5. nf-core configs: <https://nf-co.re/configs>
+
+## Exercises
+
+1. Run `nf-core list` and choose one pipeline related to your research area. What question does it answer?
+
+2. Find the documentation page for that pipeline. What input files does it require?
+
+3. Run the pipeline's `test` profile using Docker, Apptainer, or Singularity. Did it finish successfully?
+
+4. Open the output folder from the test run. Which files are in `pipeline_info/`?
+
+5. Write a small `params.yaml` file for a future nf-core run. Include at least `input`, `outdir`, and one pipeline-specific parameter.

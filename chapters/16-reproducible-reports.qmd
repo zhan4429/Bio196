@@ -1,0 +1,556 @@
+# Reproducible Reports with Quarto {#sec-quarto}
+
+## The Lab Notebook Problem
+
+You run a differential expression analysis. Two months later, a reviewer asks: "What normalization method did you use? What were the exact filter thresholds? Can you regenerate Figure 3 with an additional sample group?"
+
+If your analysis lives in a collection of R scripts, scattered shell commands, and manually copied figures, answering these questions means hours of archaeological reconstruction. Which script generated which figure? Did you change the filter threshold after making that table? Which version of the code produced the results in the manuscript?
+
+**Literate programming** solves this by keeping code, results, and narrative in a single document. When you render the document, the code runs and produces the output — figures, tables, statistics — directly embedded in the report. If you change the code, the output updates automatically.
+
+## Quarto: Next-Generation Literate Programming {#sec-quarto-intro}
+
+**Quarto** is an open-source scientific publishing system built by Posit (the makers of RStudio). It is the successor to R Markdown, with broader language support and more output formats.
+
+| Feature | R Markdown | Quarto |
+|---------|-----------|--------|
+| Languages | R (Python via reticulate) | R, Python, Julia, Observable JS — natively |
+| File extension | `.Rmd` | `.qmd` |
+| Rendering engine | knitr | knitr (R) or Jupyter (Python) |
+| Output formats | HTML, PDF, Word, slides | All of the above + books, websites, manuscripts, dashboards |
+| Cross-references | Limited | Built-in (`@fig-`, `@tbl-`, `@sec-`) |
+| Citations | Yes | Yes, with visual editor support |
+| Maintained by | Posit | Posit (actively developed) |
+
+::: {.callout-note}
+## R Markdown Still Works
+
+If your lab already uses R Markdown, it continues to work — Quarto renders `.Rmd` files without changes. For new projects, Quarto is recommended because it has better cross-referencing, multi-language support, and active development.
+:::
+
+### Installing Quarto
+
+Quarto is bundled with recent versions of RStudio (v2022.07+). To install it standalone:
+
+```bash
+# macOS
+brew install quarto
+
+# Linux (Debian/Ubuntu)
+wget https://github.com/quarto-dev/quarto-cli/\
+releases/latest/download/quarto-linux-amd64.deb
+sudo dpkg -i quarto-linux-amd64.deb
+
+# Conda
+mamba install -c conda-forge quarto
+
+# Verify
+quarto --version
+```
+
+## Anatomy of a Quarto Document {#sec-anatomy}
+
+A `.qmd` file has three parts: YAML front matter, narrative text (Markdown), and code chunks.
+
+````markdown
+---
+title: "RNA-Seq Differential Expression Report"
+author: "Your Name"
+date: today
+format:
+  html:
+    toc: true
+    code-fold: true
+---
+
+## Introduction
+
+This report analyzes RNA-seq data from a treatment vs. control experiment
+using DESeq2. We processed **6 samples** (3 per condition).
+
+## Load Data
+
+```{{r}}
+library(tidyverse)
+library(DESeq2)
+
+counts <- read_tsv("data/gene_counts.tsv")
+metadata <- read_csv("data/sample_sheet.csv")
+```
+
+## Quality Control
+
+The PCA plot below shows clear separation by condition along PC1:
+
+```{{r}}
+#| label: fig-pca
+#| fig-cap: "PCA of variance-stabilized counts."
+#| fig-width: 6
+#| fig-height: 4
+
+vsd <- vst(dds, blind = TRUE)
+plotPCA(vsd, intgroup = "condition")
+```
+
+As shown in @fig-pca, the samples separate cleanly by condition.
+````
+
+### Rendering
+
+```bash
+# Render to HTML
+quarto render analysis.qmd
+
+# Render to PDF (requires LaTeX — install with tinytex)
+quarto render analysis.qmd --to pdf
+
+# Render to Word
+quarto render analysis.qmd --to docx
+
+# Preview with live reload (opens in browser)
+quarto preview analysis.qmd
+```
+
+In RStudio, click the **Render** button or press `Ctrl+Shift+K` / `Cmd+Shift+K`.
+
+## Code Chunks {#sec-chunks}
+
+Code chunks are the core of literate programming — they contain the actual analysis code.
+
+### R Code Chunks
+
+````markdown
+```{{r}}
+#| label: load-data
+#| message: false
+
+library(tidyverse)
+samples <- read_csv("data/samples.csv")
+```
+````
+
+### Python Code Chunks
+
+````markdown
+```{{python}}
+#| label: python-analysis
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+counts = pd.read_csv("data/counts.csv", index_col=0)
+print(f"Loaded {counts.shape[0]} genes across {counts.shape[1]} samples")
+```
+````
+
+### Chunk Options
+
+Chunk options are specified with `#|` comments (the "hash-pipe" syntax):
+
+| Option | Effect | Example |
+|--------|--------|---------|
+| `label` | Name for cross-referencing | `#| label: fig-volcano` |
+| `echo` | Show the code? | `#| echo: false` |
+| `eval` | Run the code? | `#| eval: false` |
+| `message` | Show messages? | `#| message: false` |
+| `warning` | Show warnings? | `#| warning: false` |
+| `fig-cap` | Figure caption | `#| fig-cap: "Volcano plot"` |
+| `fig-width` | Figure width (inches) | `#| fig-width: 7` |
+| `fig-height` | Figure height (inches) | `#| fig-height: 5` |
+| `tbl-cap` | Table caption | `#| tbl-cap: "Top DE genes"` |
+| `cache` | Cache results? | `#| cache: true` |
+
+### Inline Code
+
+Embed computed values directly in text:
+
+````markdown
+We identified `{{r}} nrow(sig_genes)` significantly differentially expressed
+genes (adjusted p < 0.05, |log2FC| > 1).
+
+Of these, `{{r}} sum(sig_genes$direction == "Up")` were up-regulated and
+`{{r}} sum(sig_genes$direction == "Down")` were down-regulated.
+````
+
+This renders as: "We identified 1,432 significantly differentially expressed genes..."
+
+The numbers update automatically when the data changes — no manual editing needed.
+
+## Cross-References {#sec-crossref}
+
+Quarto has built-in cross-referencing for figures, tables, and sections:
+
+````markdown
+```{{r}}
+#| label: fig-volcano
+#| fig-cap: "Volcano plot of differential expression results."
+
+ggplot(de, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = direction)) +
+  theme_bw()
+```
+
+As shown in @fig-volcano, treatment induces widespread transcriptional changes.
+The top genes are listed in @tbl-top-genes.
+
+```{{r}}
+#| label: tbl-top-genes
+#| tbl-cap: "Top 10 differentially expressed genes."
+
+de |>
+  filter(direction != "NS") |>
+  slice_min(padj, n = 10) |>
+  select(symbol, log2FoldChange, padj) |>
+  knitr::kable(digits = 3)
+```
+````
+
+Prefix conventions:
+
+| Prefix | For |
+|--------|-----|
+| `fig-` | Figures |
+| `tbl-` | Tables |
+| `sec-` | Sections (set with `{#sec-name}`) |
+| `eq-` | Equations |
+
+## Output Formats {#sec-formats}
+
+### HTML Reports
+
+The most flexible format — supports interactive elements, code folding, and table of contents:
+
+```yaml
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true        # collapse code blocks by default
+    code-tools: true       # show/hide all code button
+    number-sections: true
+    theme: cosmo
+    self-contained: true   # single .html file (easy to share)
+```
+
+### PDF Reports
+
+Requires a LaTeX installation. Use `tinytex` for a minimal setup:
+
+```bash
+quarto install tinytex
+```
+
+```yaml
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+    documentclass: article
+    geometry: margin=1in
+```
+
+### Word Documents
+
+Useful when collaborators need to add comments in Word:
+
+```yaml
+format:
+  docx:
+    toc: true
+    reference-doc: template.docx   # apply your lab's formatting template
+```
+
+### Multiple Formats at Once
+
+```yaml
+format:
+  html:
+    toc: true
+    code-fold: true
+  pdf:
+    toc: true
+  docx:
+    toc: true
+```
+
+```bash
+quarto render analysis.qmd                # renders all formats
+quarto render analysis.qmd --to html      # just HTML
+```
+
+## Parameterized Reports {#sec-params}
+
+Run the same analysis with different inputs — different datasets, different thresholds, different comparisons — without modifying the code:
+
+```yaml
+---
+title: "DE Report"
+params:
+  comparison: "treatment_vs_control"
+  padj_threshold: 0.05
+  lfc_threshold: 1
+  input_file: "results/deseq2/treatment_vs_control.tsv"
+---
+```
+
+Access parameters in code:
+
+````markdown
+```{{r}}
+de <- read_tsv(params$input_file)
+
+sig <- de |>
+  filter(padj < params$padj_threshold,
+         abs(log2FoldChange) > params$lfc_threshold)
+
+cat("Comparison:", params$comparison, "\n")
+cat("Significant genes:", nrow(sig), "\n")
+```
+````
+
+Render with custom parameters from the command line:
+
+```bash
+# Default parameters
+quarto render de_report.qmd
+
+# Override for a different comparison
+quarto render de_report.qmd -P comparison:knockout_vs_wildtype \
+                             -P input_file:results/deseq2/ko_vs_wt.tsv
+```
+
+::: {.callout-tip}
+## Pro-Tip: Generate Reports for Every Comparison
+
+Use a shell loop or a Snakemake rule to render one report per comparison:
+
+```bash
+for comparison in trt_vs_ctrl ko_vs_wt drug_vs_vehicle; do
+  quarto render de_report.qmd \
+    -P comparison:${comparison} \
+    -P input_file:results/deseq2/${comparison}.tsv \
+    --output ${comparison}_report.html
+done
+```
+:::
+
+## Mixing R and Python {#sec-multilang}
+
+Quarto natively supports both R and Python in the same document. Data can be shared between them using the `reticulate` package:
+
+````markdown
+```{{r}}
+#| label: r-analysis
+library(tidyverse)
+
+de <- read_tsv("results/deseq2/treatment_vs_control.tsv")
+sig_genes <- de |> filter(padj < 0.05, abs(log2FoldChange) > 1)
+cat("Significant genes:", nrow(sig_genes))
+```
+
+```{{python}}
+#| label: python-ml
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+
+# Access the R data frame via reticulate
+sig = r.sig_genes  # r.object_name accesses R objects from Python
+
+print(f"Received {len(sig)} genes from R")
+```
+````
+
+This is powerful for bioinformatics workflows that use R for statistics (DESeq2, Bioconductor) and Python for machine learning (scikit-learn, PyTorch).
+
+## Project Organization {#sec-project}
+
+A well-organized Quarto analysis project:
+
+```
+rnaseq_analysis/
+├── _quarto.yml              ← project config (optional)
+├── 01_quality_control.qmd
+├── 02_differential_expression.qmd
+├── 03_pathway_analysis.qmd
+├── data/
+│   ├── samples.csv
+│   └── gene_counts.tsv
+├── results/
+│   ├── tables/
+│   └── figures/
+├── scripts/
+│   └── helper_functions.R
+└── references.bib
+```
+
+### Caching Long Computations
+
+Some bioinformatics analyses take hours. Use `cache: true` to avoid re-running expensive steps:
+
+````markdown
+```{{r}}
+#| label: run-deseq2
+#| cache: true
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData = metadata,
+  design = ~ condition
+)
+dds <- DESeq(dds)
+```
+````
+
+Cached results are stored in a `_cache/` directory. Quarto re-runs the chunk only if the code changes.
+
+::: {.callout-warning}
+## Cache Invalidation
+
+Caching saves time but can produce stale results if upstream data changes without any change to the code. Use `#| dependson: "chunk-name"` to set explicit dependencies, or periodically render with `--cache-refresh` to rebuild everything:
+
+```bash
+quarto render analysis.qmd --cache-refresh
+```
+:::
+
+## Practical Example: RNA-Seq Analysis Report {#sec-example}
+
+A minimal but complete RNA-seq analysis report:
+
+````markdown
+---
+title: "RNA-Seq: Treatment vs. Control"
+author: "Your Name"
+date: today
+format:
+  html:
+    toc: true
+    code-fold: true
+    self-contained: true
+params:
+  counts_file: "data/gene_counts.tsv"
+  metadata_file: "data/samples.csv"
+  padj_cutoff: 0.05
+  lfc_cutoff: 1
+---
+
+## Setup
+
+```{{r}}
+#| label: setup
+#| message: false
+
+library(tidyverse)
+library(DESeq2)
+library(ggrepel)
+library(pheatmap)
+```
+
+## Load Data
+
+```{{r}}
+#| label: load-data
+
+counts <- read_tsv(params$counts_file) |>
+  column_to_rownames("gene_id") |>
+  as.matrix()
+
+metadata <- read_csv(params$metadata_file)
+metadata$condition <- factor(
+  metadata$condition,
+  levels = c("control", "treatment")
+)
+```
+
+We loaded `{{r}} ncol(counts)` samples and `{{r}} nrow(counts)` genes.
+
+## Differential Expression
+
+```{{r}}
+#| label: run-deseq
+#| cache: true
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData = metadata,
+  design = ~ condition
+)
+
+dds <- DESeq(dds)
+res <- results(dds, contrast = c("condition", "treatment", "control"))
+```
+
+## Results
+
+```{{r}}
+#| label: fig-volcano
+#| fig-cap: "Volcano plot. Red = up-regulated, blue = down-regulated."
+#| fig-width: 7
+#| fig-height: 5
+
+de <- as_tibble(res, rownames = "gene_id") |>
+  mutate(direction = case_when(
+    padj < params$padj_cutoff &
+      log2FoldChange > params$lfc_cutoff ~ "Up",
+    padj < params$padj_cutoff &
+      log2FoldChange < -params$lfc_cutoff ~ "Down",
+    TRUE ~ "NS"
+  ))
+
+top_genes <- de |> filter(direction != "NS") |> slice_min(padj, n = 10)
+
+ggplot(de, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = direction), size = 0.5, alpha = 0.6) +
+  geom_text_repel(data = top_genes, aes(label = gene_id), size = 2.5) +
+  scale_color_manual(
+    values = c(
+      "Up" = "#D73027",
+      "Down" = "#4575B4",
+      "NS" = "grey70"
+    )
+  ) +
+  theme_bw()
+```
+
+We identified **`{{r}} sum(de$direction == "Up")`** up-regulated and
+**`{{r}} sum(de$direction == "Down")`** down-regulated genes
+(adjusted p < `{{r}} params$padj_cutoff`, |log2FC| > `{{r}} params$lfc_cutoff`).
+
+## Session Info
+
+```{{r}}
+sessionInfo()
+```
+````
+
+## Exercises
+
+1. **First Quarto document.** Create a `.qmd` file that loads a CSV, computes summary statistics, and produces a ggplot2 figure. Render it to HTML.
+
+2. **Cross-references.** Add `#| label: fig-` and `#| fig-cap:` to your figure chunk. Reference it in the text with `@fig-name`. Render and verify the cross-reference works.
+
+3. **Code folding.** Set `code-fold: true` in your YAML front matter. Render to HTML and verify that code blocks are collapsed by default with a "Show code" toggle.
+
+4. **Parameterized report.** Create a DE analysis report with parameters for `padj_threshold` and `lfc_threshold`. Render it twice with different thresholds and compare the results.
+
+5. **Multi-format output.** Add `pdf` and `docx` to your YAML format section. Render all three formats. Compare the output quality.
+
+6. **Mixed languages.** Create a document that uses an R chunk to load and process data, then a Python chunk to train a scikit-learn model on the same data. Use `r.dataframe_name` in the Python chunk to access the R data.
+
+7. **Batch reports.** Write a shell loop that renders a parameterized QC report for each sample in a list. Each report should include sample-specific figures and statistics.
+
+## Summary
+
+| Concept | Key Takeaway |
+|---------|-------------|
+| Literate programming | Code + narrative + results in one document |
+| Quarto (`.qmd`) | Successor to R Markdown; supports R, Python, Julia |
+| Code chunks | `{r}` or `{python}` blocks with `#|` options |
+| `code-fold: true` | Collapse code in HTML output for cleaner reports |
+| Cross-references | `@fig-`, `@tbl-`, `@sec-` for automatic numbering |
+| Parameterized reports | `params:` in YAML; override with `-P key:value` |
+| Caching | `#| cache: true` for expensive computations |
+| Inline code | `` `{{r}} nrow(data)` `` embeds computed values in text |
+| `self-contained: true` | Single HTML file, easy to share |
+| Multiple formats | Render to HTML, PDF, and Word from the same source |

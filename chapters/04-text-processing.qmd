@@ -1,0 +1,1115 @@
+# Unix Text Processing
+
+Genomic data is, at its core, plain text. A FASTQ file from a sequencer is newline-delimited records. A VCF file from a variant caller is tab-separated columns with a header block. A GFF3 annotation is nine tab-delimited fields per feature, one line per record. Even a BAM alignment file, which is binary for efficiency, becomes tab-delimited text the moment you pass it through `samtools view`. This is not an accident — the Unix text-processing philosophy of flat, human-readable files was deliberately carried forward into bioinformatics precisely because it allows every standard Unix tool to work on genomic data without modification.
+
+The practical consequence is profound: you do not need a custom script, a graphical database browser, or a specialized application to ask most questions about a genomic dataset. How many reads did this experiment produce? How many genes are on chromosome 3? What fraction of variants passed quality filters? All of these questions can be answered in seconds with a one-line Unix command. The tools you need — `grep`, `awk`, `cut`, `sort`, `sed`, and their companions — have been refined for fifty years to handle large, streaming text data efficiently.
+
+This chapter builds a practical toolkit for text processing in bioinformatics. The tools are introduced individually, each with a concrete genomic use case, and then combined into real multi-step pipelines at the end. By the time you finish, a raw VCF or GFF file will feel like a spreadsheet you can query from the command line — faster, more reproducible, and far more scriptable than any GUI.
+
+::: {.callout-note}
+## File Formats You Will See in This Chapter
+
+| Format | Description | Delimiter |
+|--------|-------------|-----------|
+| FASTA | Reference sequences | `>header` line + sequence lines |
+| FASTQ | Sequencing reads + quality | 4 lines per read |
+| BED | Genomic intervals | Tab-delimited, 0-based coordinates |
+| GFF3/GTF | Gene annotations | Tab-delimited, 9 fields |
+| VCF | Genetic variants | Tab-delimited, `#` header block |
+| SAM | Sequence alignments | Tab-delimited, `@` header block |
+
+All six formats are plain text and are processed identically by Unix tools.
+:::
+
+## `wc` — Counting Lines, Words, and Bytes
+
+Before doing anything with a file, you need to know its basic dimensions. `wc` (word count) answers this instantly.
+
+```bash
+wc reads.fastq            # lines, words, and bytes all at once
+wc -l reads.fastq         # count lines only (most useful in bioinformatics)
+wc -c genome.fa           # count bytes (file size without calling ls)
+wc -w report.txt          # count whitespace-delimited words
+```
+
+| Flag | What it counts |
+|------|---------------|
+| `-l` | Lines (newlines) |
+| `-w` | Words (whitespace-delimited tokens) |
+| `-c` | Bytes |
+| `-m` | Characters (differs from bytes for UTF-8) |
+
+### Bioinformatics Examples
+
+**Count sequences in a FASTA file.** Every FASTA record starts with `>`. Counting those lines counts sequences:
+
+```bash
+grep -c "^>" genome.fa        # number of sequences (chromosomes, contigs)
+grep -c "^>" proteins.fa      # number of protein sequences
+```
+
+**Count reads in a FASTQ file.** FASTQ records are exactly 4 lines each. Dividing total lines by 4 gives read count:
+
+```bash
+# Method 1: arithmetic expansion
+echo $(($(wc -l < reads.fastq) / 4))
+
+# Method 2: count only the header lines (faster for large files)
+grep -c "^@" reads.fastq
+```
+
+::: {.callout-warning}
+## FASTQ Quality Scores Can Start with `@`
+
+The `grep -c "^@"` trick for counting FASTQ reads can overcount if quality score lines happen to start with `@` (ASCII 64). For very large files, the arithmetic method `$(($(wc -l < file) / 4))` is safer. Alternatively, use `seqkit stats` from the `seqkit` toolkit for robust read counting.
+:::
+
+**Count variants in a VCF file.** VCF files begin with `##` meta-information lines and a `#CHROM` header line. Variants are all non-comment lines:
+
+```bash
+grep -v "^#" variants.vcf | wc -l    # count variant records
+```
+
+::: {.callout-tip}
+## Pro-Tip: Redirect Into `wc -l` to Suppress the Filename
+
+`wc -l reads.fastq` prints both the count and the filename. When you only want the number (for use in a script or arithmetic), redirect with `<`:
+
+```bash
+wc -l < reads.fastq        # prints only the number, no filename
+```
+
+This is the form used in the FASTQ read-count formula above.
+:::
+
+## `grep` — Pattern Searching
+
+`grep` searches for lines matching a pattern and prints them to standard output. It is arguably the single most-used bioinformatics one-liner tool, because "find lines that match this pattern" covers an enormous range of tasks: extracting FASTA headers, filtering VCF chromosomes, locating genes in an annotation file, and much more.
+
+```bash
+grep "PATTERN" file.txt           # basic search
+grep -i "pattern" file.txt        # case-insensitive
+grep -v "pattern" file.txt        # invert: lines that do NOT match
+grep -c "pattern" file.txt        # count matching lines
+grep -n "pattern" file.txt        # show line numbers
+grep -r "pattern" directory/      # recursive: search all files in directory
+```
+
+### Common Flags Reference
+
+| Flag | Effect | Example |
+|------|--------|---------|
+| `-i` | Case-insensitive match | `grep -i "PASS" variants.vcf` |
+| `-v` | Invert match (non-matching lines) | `grep -v "^#" vcf.txt` |
+| `-c` | Print count of matching lines only | `grep -c "^>" seqs.fa` |
+| `-n` | Prefix each output line with its line number | `grep -n "error" log.txt` |
+| `-r` | Recursively search directories | `grep -r "chr1" results/` |
+| `-l` | Print only filenames containing a match | `grep -rl "BRCA1" *.vcf` |
+| `-E` | Extended regular expressions (ERE) | `grep -E "^chr[0-9]+"` |
+| `-F` | Fixed string (no regex, faster) | `grep -F "rs12345"` |
+| `-w` | Match whole words only | `grep -w "exon" annotation.gff` |
+| `-A N` | Print N lines **after** each match | `grep -A 3 "^>" seqs.fa` |
+| `-B N` | Print N lines **before** each match | `grep -B 1 "error" log.txt` |
+| `-C N` | Print N lines before and after each match | `grep -C 2 "FAIL" qc.txt` |
+| `--color` | Highlight matches in the terminal | `grep --color "PASS" vcf.txt` |
+
+### Bioinformatics Examples
+
+**Extract FASTA headers to check what sequences are in a file:**
+
+```bash
+grep "^>" genome.fa                      # print all headers
+grep "^>" genome.fa | head -20           # just the first 20
+grep -c "^>" genome.fa                   # how many sequences total
+```
+
+**Find all genes with a specific name in a GFF3 file:**
+
+```bash
+# The -w flag ensures "TP53" does not also match "TP530"
+grep -w "TP53" annotation.gff3
+
+# Gene name may be in the attributes column with various quoting styles
+grep -E 'gene_name "?TP53"?' annotation.gtf
+```
+
+**Filter a VCF to specific chromosomes:**
+
+```bash
+# Keep header + chromosome 1 variants
+grep -E "^#|^chr1\t" variants.vcf > chr1_variants.vcf
+
+# Remove alternate contigs (keep only standard chromosomes)
+grep -vE "^chr[0-9Un].*_" variants.vcf > clean_variants.vcf
+```
+
+**Use context flags to extract full FASTA records by header pattern:**
+
+```bash
+# Extract a sequence and its following line(s) with -A
+grep -A 1 ">BRCA1" sequences.fa          # header + one sequence line
+
+# For multi-line FASTA (more than one line per sequence), use -A with a large number
+# or use bioawk/seqkit for robust extraction
+```
+
+**Find reads containing an adapter sequence:**
+
+```bash
+# FASTQ read sequence is on line 2 of each 4-line record
+grep "AGATCGGAAGAGC" reads.fastq | wc -l     # count contaminated reads
+grep -c "AGATCGGAAGAGC" reads.fastq           # same, cleaner
+```
+
+**Recursive search across multiple annotation files:**
+
+```bash
+# Find which of many GFF files contains a particular gene
+grep -rl "ENSG00000139618" annotations/     # print filenames only
+grep -rn "ENSG00000139618" annotations/     # print filename:linenum:content
+```
+
+::: {.callout-tip}
+## Pro-Tip: `-F` Is Dramatically Faster for Fixed Strings
+
+When your pattern is a literal string (no regex metacharacters), use `grep -F`. It bypasses the regex engine entirely and uses a much faster string-matching algorithm. For searching a dbSNP rsID in a large VCF:
+
+```bash
+grep -F "rs1234567" dbsnp.vcf.gz    # much faster than grep "rs1234567"
+```
+
+The speedup can be 3–10× on large files.
+:::
+
+## Regular Expressions Primer {#sec-regex}
+
+`grep` becomes far more powerful when combined with regular expressions (regex) — a pattern language for describing text. Regular expressions describe *shapes* of text rather than exact strings, so one pattern can match thousands of different lines.
+
+### Core Regex Syntax
+
+| Metacharacter | Meaning | Example pattern | Matches |
+|---------------|---------|-----------------|---------|
+| `.` | Any single character | `A.G` | `AAG`, `ACG`, `ATG`, `AGG` |
+| `*` | Zero or more of the preceding | `AT*G` | `AG`, `ATG`, `ATTG`, `ATTTG` |
+| `+` | One or more of the preceding (ERE) | `AT+G` | `ATG`, `ATTG`, `ATTTG` |
+| `?` | Zero or one of the preceding (ERE) | `colou?r` | `color`, `colour` |
+| `^` | Start of line | `^chr` | Lines beginning with `chr` |
+| `$` | End of line | `\.fa$` | Lines ending with `.fa` |
+| `[]` | Character class (any one of) | `[ACGT]` | Any single nucleotide |
+| `[^]` | Negated class (any one NOT in) | `[^ACGT]` | Non-nucleotide characters |
+| `\t` | Tab character | `\t` | A literal tab |
+| `\s` | Any whitespace | `\s+` | One or more spaces/tabs |
+| `{n,m}` | Between n and m repetitions (ERE) | `A{2,4}` | `AA`, `AAA`, `AAAA` |
+| `(group)` | Capturing group (ERE) | `(chr)([0-9]+)` | `chr1`, `chr22` |
+| `\|` | Alternation — OR (ERE) | `exon\|intron` | Either word |
+
+::: {.callout-note}
+## Basic Regex vs. Extended Regex
+
+`grep` by default uses **Basic Regular Expressions (BRE)**, where metacharacters like `+`, `?`, `{`, `}`, `(`, `)`, and `|` must be **escaped with a backslash** to have special meaning. This is counterintuitive and error-prone.
+
+Use `grep -E` (or `egrep`) for **Extended Regular Expressions (ERE)**, where those metacharacters work without escaping. In bioinformatics, `-E` is almost always what you want.
+
+```bash
+# BRE: escape + and | to use them as metacharacters
+grep "chr[0-9]\+" regions.bed
+grep "exon\|intron" annotation.gff
+
+# ERE: much cleaner — just use + and | directly
+grep -E "chr[0-9]+" regions.bed
+grep -E "exon|intron" annotation.gff
+```
+:::
+
+### Bioinformatics Regex Examples
+
+**Match standard chromosome names only:**
+
+```bash
+# Matches chr1 through chr22, chrX, chrY, chrM
+grep -E "^chr([0-9]+|X|Y|M)\t" variants.vcf
+
+# Exclude alternate contigs (anything with _ in the chromosome name)
+grep -vE "^chr[^\t]*_" variants.vcf
+```
+
+**Match FASTA headers with specific patterns:**
+
+```bash
+# Headers that include "mitochondria" or "MT" (case-insensitive)
+grep -iE "^>.*(mitochondria|chrMT|chrM)" genome.fa
+
+# Headers that include a gene symbol followed by a pipe character
+grep -E "^>[A-Z][A-Z0-9]{1,7}\|" proteins.fa
+
+# Extract only the accession number from NCBI-style headers
+grep "^>" genome.fa | grep -oE "NC_[0-9]+\.[0-9]+"
+```
+
+**Match degenerate nucleotide patterns:**
+
+```bash
+# Find potential start codons (ATG) or Kozak-like context
+grep -E "[AG]CCATGG" sequences.fa      # perfect Kozak consensus
+
+# Find hexamers that could be restriction sites
+grep -E "GAATTC" genome.fa             # EcoRI recognition site
+```
+
+::: {.callout-tip}
+## Pro-Tip: Test Your Regex on Small Data First
+
+Before running a regex on a 50 GB VCF, test it on the first 1000 lines:
+
+```bash
+head -1000 variants.vcf | grep -E "YOUR_PATTERN"
+```
+
+This is fast and lets you verify the pattern before committing to a long run.
+:::
+
+## `cut` — Extracting Columns
+
+`cut` extracts specific columns (fields) from each line of a file. It is the simplest column-selection tool and is ideal when you know exactly which fields you want. Unlike `awk`, it cannot compute or filter — it only extracts.
+
+```bash
+cut -f1,2,3 file.bed           # fields 1, 2, 3 (tab-delimited by default)
+cut -f1-5 file.tsv             # fields 1 through 5
+cut -f4- file.tsv              # fields 4 to the end of line
+cut -f1 -d"," data.csv         # first field from a comma-delimited CSV
+cut -f1 -d":" /etc/passwd      # first field from colon-delimited file
+```
+
+| Flag | Meaning |
+|------|---------|
+| `-f` | Field numbers to extract (1-based) |
+| `-d` | Delimiter character (default: tab) |
+| `-c` | Character positions instead of fields |
+| `--complement` | Extract all fields EXCEPT the specified ones |
+
+### Bioinformatics Examples
+
+**Extract chromosome and position from a VCF file:**
+
+```bash
+# VCF fields: CHROM POS ID REF ALT QUAL FILTER INFO ...
+grep -v "^#" variants.vcf | cut -f1,2         # chromosome and position only
+grep -v "^#" variants.vcf | cut -f1,2,4,5    # CHROM, POS, REF, ALT
+```
+
+**Extract feature types from a GFF3 file to see what is annotated:**
+
+```bash
+# GFF3 field 3 is the feature type (gene, mRNA, exon, CDS, ...)
+grep -v "^#" annotation.gff3 | cut -f3 | sort | uniq -c | sort -rn
+```
+
+**Extract gene names from a GTF attributes column:**
+
+```bash
+# GTF field 9 contains key-value attributes including gene_name
+cut -f9 annotation.gtf | grep -oE 'gene_name "[^"]+"' | sort -u | head -20
+```
+
+**Get a list of all chromosomes in a BED file:**
+
+```bash
+cut -f1 regions.bed | sort -u           # sorted list of unique chromosomes
+```
+
+::: {.callout-warning}
+## `cut` Requires a True Tab as Delimiter
+
+`cut` treats the delimiter literally. If your "tab-delimited" file actually uses spaces, or if it has mixed whitespace, `cut` will fail silently and return wrong columns. Always verify your delimiter:
+
+```bash
+cat -A file.tsv | head -3      # ^I is a tab character, $ marks end of line
+```
+
+If fields are separated by variable whitespace, use `awk` instead.
+:::
+
+## `sort` — Sorting Data
+
+`sort` is deceptively powerful. It handles alphabetical and numeric ordering, multi-key sorting, large files that exceed RAM, and deduplication. In bioinformatics, correctly sorting genomic coordinates is critical — many tools (BEDTools, tabix, GATK) require input to be sorted in a specific order.
+
+```bash
+sort file.txt                          # alphabetical, ascending
+sort -r file.txt                       # reverse (descending)
+sort -n numbers.txt                    # numeric sort (not lexicographic)
+sort -k2,2n regions.bed               # sort numerically by column 2 only
+sort -k1,1 -k2,2n regions.bed        # sort by column 1, then numerically by column 2
+sort -t$'\t' -k5,5rn counts.tsv      # tab-delimited, col 5 numeric descending
+sort -u file.txt                       # sort and remove duplicate lines
+sort -S 4G large_file.txt             # allow 4 GB of RAM before spilling to disk
+```
+
+### Key Flag Reference
+
+| Flag | Meaning |
+|------|---------|
+| `-k start,end` | Sort on fields `start` through `end` |
+| `-n` | Numeric sort (required for numbers, otherwise `10 < 9`) |
+| `-r` | Reverse order |
+| `-t CHAR` | Field delimiter (default: whitespace) |
+| `-u` | Unique — discard duplicate lines after sorting |
+| `-S SIZE` | Memory limit (`4G`, `500M`, etc.) |
+| `--parallel=N` | Use N parallel threads for large sorts |
+| `-T DIR` | Temporary directory for large sorts |
+
+### Sorting Genomic Coordinates
+
+The most common sort in bioinformatics — sorting a BED file by chromosome then by start position — requires understanding how sort keys work:
+
+```bash
+# Sort a BED file: chr alphabetically, then start position numerically
+sort -k1,1 -k2,2n regions.bed > regions_sorted.bed
+
+# Sort a VCF by coordinate (skip header lines)
+grep "^#" variants.vcf > sorted.vcf
+grep -v "^#" variants.vcf | sort -k1,1 -k2,2n >> sorted.vcf
+```
+
+The `-k1,1` syntax means "use only field 1 for this key" (start at field 1, end at field 1). Without the ending field number, sort would use from field 1 to the end of the line, which can produce unexpected results.
+
+::: {.callout-note}
+## Numeric vs. Lexicographic Sort — A Critical Difference
+
+Without `-n`, sort treats all values as text:
+
+```
+# Lexicographic: 10 sorts between 1 and 2 because "10" starts with "1"
+1, 10, 100, 2, 20, 3
+
+# Numeric (-n): correct ordering
+1, 2, 3, 10, 20, 100
+```
+
+Always use `-n` when sorting genomic positions. A BED file sorted without `-n` on column 2 will have positions 1, 10, 100, 2, 20, 3 — which is wrong for every downstream tool.
+:::
+
+**Sort by quality score descending (highest quality variants first):**
+
+```bash
+grep -v "^#" variants.vcf | sort -k6,6rn | head -20   # top 20 by QUAL score
+```
+
+**Memory considerations for large files:**
+
+```bash
+# By default, sort uses ~10% of system RAM. For large genomic files, be explicit:
+sort -S 8G -T /scratch/$USER/tmp -k1,1 -k2,2n big_bed_file.bed
+```
+
+::: {.callout-tip}
+## Pro-Tip: `sort -u` Is Faster Than `sort | uniq`
+
+`sort -u` performs deduplication during the sort pass itself, which is faster than piping to `uniq` afterwards. Use `sort -u` when you only need unique lines and do not need the counts that `uniq -c` provides.
+:::
+
+## `uniq` — Counting and Deduplicating
+
+`uniq` collapses or reports consecutive duplicate lines. Because it only looks at adjacent lines, it must almost always be preceded by `sort`. Together, `sort | uniq` forms one of the most-used patterns in Unix text processing.
+
+```bash
+sort file.txt | uniq              # remove duplicate lines
+sort file.txt | uniq -c           # prefix each line with occurrence count
+sort file.txt | uniq -d           # print only lines that are duplicated
+sort file.txt | uniq -u           # print only lines that appear exactly once
+sort file.txt | uniq -i           # case-insensitive deduplication
+```
+
+| Flag | Effect |
+|------|--------|
+| `-c` | Prefix lines with the count of occurrences |
+| `-d` | Print only duplicated lines (one copy each) |
+| `-u` | Print only unique lines (appear exactly once) |
+| `-i` | Case-insensitive comparison |
+
+### Bioinformatics Examples
+
+**Count how many features of each type are in a GFF3 file:**
+
+```bash
+grep -v "^#" annotation.gff3 | cut -f3 | sort | uniq -c | sort -rn
+# Output might look like:
+# 500000 exon
+# 200000 CDS
+#  50000 mRNA
+#  25000 gene
+#   5000 UTR
+```
+
+**Count reads per chromosome in a SAM file:**
+
+```bash
+# Column 3 in SAM is the reference sequence name (chromosome)
+samtools view sample.bam | cut -f3 | sort | uniq -c | sort -rn
+```
+
+**Find duplicate read names in a SAM file (a sign of file corruption or PCR duplicates not properly handled):**
+
+```bash
+# Column 1 in SAM is the read name (QNAME)
+samtools view sample.bam | cut -f1 | sort | uniq -d | head -20
+```
+
+**List unique chromosomes in a BED file:**
+
+```bash
+cut -f1 regions.bed | sort -u      # unique chromosomes, sorted alphabetically
+cut -f1 regions.bed | sort | uniq -c | sort -rn   # with counts
+```
+
+::: {.callout-warning}
+## `uniq` Without `sort` Is Silently Wrong
+
+`uniq` only removes adjacent duplicates. If your input has `chrX` on line 1, then `chr1` on line 100, then `chrX` again on line 500, only the line-100 `chr1` is not adjacent to another `chr1`, and none of the `chrX` entries will be collapsed. Always sort first unless you know the input is already sorted.
+:::
+
+## `awk` — Column-Aware Processing {#sec-awk}
+
+`awk` is a complete mini-programming language embedded in Unix. While `cut` extracts columns and `grep` filters lines, `awk` can do both simultaneously, perform arithmetic, apply conditional logic, reformat output, and accumulate statistics across an entire file. It is the most powerful single-tool text processor in bioinformatics.
+
+The fundamental structure of every `awk` command is:
+
+```
+awk 'CONDITION { ACTION }' file
+```
+
+For each line of input, `awk` evaluates the CONDITION; if true, it executes the ACTION. Fields are automatically parsed and available as `$1`, `$2`, ..., `$NF` (last field), with `$0` representing the entire line.
+
+### Setting the Field Separator
+
+Always specify the delimiter explicitly. Without it, `awk` splits on any whitespace and collapses consecutive spaces, which silently corrupts columns in tab-delimited files containing empty fields:
+
+```bash
+awk -F '\t' '{ print $3 }' annotation.gff3    # correct: tab-delimited
+awk -F ',' '{ print $2 }' data.csv            # comma-delimited
+awk 'BEGIN { FS="\t"; OFS="\t" } { print $1, $3 }' file.tsv  # in BEGIN block
+```
+
+### Built-in Variables
+
+| Variable | Meaning |
+|----------|---------|
+| `$0` | The entire current line |
+| `$1`, `$2`, ... | Individual fields |
+| `$NF` | The last field on the line |
+| `NR` | Current record (line) number |
+| `NF` | Number of fields on the current line |
+| `FS` | Input field separator (set with `-F` or in `BEGIN`) |
+| `OFS` | Output field separator (default: space) |
+| `ORS` | Output record separator (default: newline) |
+| `FNR` | Record number within the current file |
+
+### Filtering Rows
+
+```bash
+# Filter BED file for features on chromosome 1
+awk -F '\t' '$1 == "chr1"' regions.bed
+
+# Filter GFF3 for features longer than 1000 bp
+awk -F '\t' '$3 == "exon" && $5 - $4 > 1000' annotation.gff3
+
+# Keep only PASS variants in a VCF (skip header lines)
+awk -F '\t' '/^#/ || $7 == "PASS"' variants.vcf
+
+# Pattern matching with ~ (regex match operator)
+awk '$1 ~ /^chr[0-9]+$/' regions.bed      # standard autosomes only
+awk '$1 !~ /^#/' variants.vcf             # lines that are not comments
+```
+
+### Computing New Values
+
+```bash
+# Compute feature length from BED coordinates (0-based, half-open)
+awk -F '\t' -v OFS='\t' '{ print $0, $3-$2 }' regions.bed
+
+# Convert GTF coordinates to BED format (GTF is 1-based, BED is 0-based)
+awk -F '\t' -v OFS='\t' '$3 == "exon" { print $1, $4-1, $5 }' annotation.gtf
+
+# Compute GC content of a simple sequence (assumes single-line FASTA)
+awk '/^[ACGTN]/ {
+    gc = gsub(/[GC]/, "&")     # gsub returns count of replacements
+    print gc / length($0) * 100 "% GC"
+}' sequence.fa
+```
+
+### `BEGIN` and `END` Blocks
+
+`BEGIN` runs once before any input is read — use it for initialization and printing headers. `END` runs once after all input is processed — use it for summaries and final calculations.
+
+```bash
+# Compute mean coverage depth from a BED coverage file (column 4 = depth)
+awk -F '\t' '{ sum += $4; n++ } END { printf "Mean coverage: %.2f\n", sum/n }' \
+    coverage.bed
+
+# Print a header, then process data, then print a total
+awk -F '\t' '
+    BEGIN { print "chr\tstart\tend\tlength"; total = 0 }
+    { len = $3 - $2; print $1, $2, $3, len; total += len }
+    END   { print "Total bases:", total }
+' OFS="\t" regions.bed
+
+# Count reads and compute mean read length from a FASTQ file
+# FASTQ: line 1 = header, line 2 = sequence, line 3 = +, line 4 = quality
+awk 'NR % 4 == 2 { total += length($0); count++ }
+     END { printf "Reads: %d  Mean length: %.1f bp\n", count, total/count }' \
+    reads.fastq
+```
+
+### Conditional Logic
+
+```bash
+# Classify variants as SNP or indel based on REF/ALT length
+awk -F '\t' '!/^#/ {
+    if (length($4) == 1 && length($5) == 1)
+        print $1, $2, "SNP"
+    else
+        print $1, $2, "indel"
+}' OFS="\t" variants.vcf
+
+# Flag low-quality variants
+awk -F '\t' '!/^#/ {
+    if ($6 >= 30) status = "HIGHQUAL"
+    else          status = "LOWQUAL"
+    print $0, status
+}' OFS="\t" variants.vcf
+```
+
+### Bioinformatics `awk` Recipes
+
+**Filter BED file by minimum feature length:**
+
+```bash
+awk -F '\t' '$3 - $2 > 1000' regions.bed     # keep features > 1 kb
+```
+
+**Reformat a GTF to a simplified BED file:**
+
+```bash
+# GTF field 3 = feature type, $4 = start (1-based), $5 = end, $14 = gene name
+# BED is 0-based at start, so subtract 1 from GTF start
+awk -F '\t' -v OFS='\t' '$3 == "exon" {
+    gsub(/"/, "", $14)     # remove quotes from gene name
+    print $1, $4-1, $5, $14, ".", $7
+}' annotation.gtf > exons.bed
+```
+
+**Compute mean coverage from a BED coverage file:**
+
+```bash
+awk -F '\t' '{ sum += $4; n++ } END { printf "Mean depth: %.1f\n", sum/n }' \
+    coverage.bedgraph
+```
+
+**Filter VCF by quality score, keeping the header:**
+
+```bash
+awk -F '\t' '$6 > 30 || /^#/' variants.vcf > highqual.vcf
+```
+
+**Compute per-chromosome variant counts:**
+
+```bash
+grep -v "^#" variants.vcf | awk -F '\t' '{ counts[$1]++ }
+    END { for (chr in counts) print counts[chr], chr }' | sort -rn
+```
+
+**Extract read lengths from a SAM file and count each length:**
+
+```bash
+samtools view sample.bam | awk '{ print length($10) }' | sort -n | uniq -c
+```
+
+::: {.callout-tip}
+## Pro-Tip: `awk` vs. Python for One-Liners
+
+Use `awk` when the logic fits on one or two lines: column selection, row filtering, and simple aggregation. The advantages are that `awk` starts instantly (no interpreter warmup), reads input line by line without loading the whole file into memory, and its pattern-action syntax is very compact for tabular data.
+
+Switch to Python when you need: complex string parsing, data structures (dictionaries, nested lists), external libraries, or logic that spans more than ~5 lines. A readable 20-line Python script is always better than an incomprehensible 5-line `awk` one-liner.
+
+As a rule of thumb: if you are reaching for `awk` arrays more than once, write a Python script.
+:::
+
+## `sed` — Stream Editing {#sec-sed}
+
+`sed` (stream editor) processes a file line by line, applying editing commands. Its most common use is substitution (`s`), but it can also delete lines, extract ranges, and perform complex multi-operation edits. Unlike a text editor, `sed` processes data in a stream — it never loads the whole file into memory, which makes it efficient on large genomic files.
+
+```bash
+sed 's/old/new/' file.txt           # replace first occurrence per line
+sed 's/old/new/g' file.txt          # replace ALL occurrences per line (global)
+sed 's/old/new/gi' file.txt         # case-insensitive global replace
+sed -n '10,20p' file.txt            # print only lines 10 through 20
+sed '/pattern/d' file.txt           # delete lines matching a pattern
+sed -i 's/old/new/g' file.txt       # edit the file in-place (modifies the file!)
+sed -i.bak 's/old/new/g' file.txt   # in-place edit, keeping a .bak backup
+```
+
+### Substitution Syntax
+
+```
+s / PATTERN / REPLACEMENT / FLAGS
+```
+
+- `PATTERN` is a regex (basic by default; use `\|`, `\+` for BRE or add `-E` flag)
+- `REPLACEMENT` can include `&` (the matched text) or `\1`, `\2` for captured groups
+- `FLAGS`: `g` = global, `i` = case-insensitive, `2` = second occurrence only
+
+### Bioinformatics Examples
+
+**Fix Windows line endings (carriage return `\r`) that corrupt tools:**
+
+```bash
+sed 's/\r//' windows_file.txt > fixed_file.txt
+
+# Or in-place:
+sed -i 's/\r//' config_file.txt
+```
+
+**Rename chromosomes from UCSC (`chr1`) to Ensembl (`1`) style:**
+
+```bash
+# Remove "chr" prefix from all lines
+sed 's/^chr//' variants.vcf > ensembl_variants.vcf
+
+# Or the reverse — add "chr" prefix to non-header lines
+sed '/^#/!s/^/chr/' ensembl.vcf > ucsc.vcf
+```
+
+**Remove FASTA header lines to get only sequence data:**
+
+```bash
+sed '/^>/d' genome.fa > sequences_only.txt
+```
+
+**Extract a specific line range from a large file:**
+
+```bash
+sed -n '1001,2000p' large_file.txt    # lines 1001 to 2000 (faster than head/tail combo)
+```
+
+**Replace sample names in a pipeline configuration:**
+
+```bash
+# In a Snakemake config or sample sheet
+sed 's/SAMPLE_PLACEHOLDER/SRR12345678/g' pipeline_config.yaml > run_config.yaml
+```
+
+**Strip trailing whitespace from a file:**
+
+```bash
+sed 's/[[:space:]]*$//' messy_file.txt > clean_file.txt
+```
+
+::: {.callout-warning}
+## `sed -i` Behavior Differs Between macOS and Linux
+
+On macOS (BSD `sed`), `-i` requires an argument for the backup suffix, even if you want no backup:
+
+```bash
+# Linux (GNU sed): works with empty string
+sed -i 's/old/new/' file.txt
+
+# macOS (BSD sed): requires an explicit suffix, use '' for no backup
+sed -i '' 's/old/new/' file.txt
+```
+
+For portable scripts that run on both systems, use `sed -i.bak` (which creates a backup) or use `perl -pi -e 's/old/new/g' file.txt` which behaves consistently on both platforms.
+:::
+
+::: {.callout-tip}
+## Pro-Tip: Chain Multiple `sed` Commands with `-e`
+
+Rather than piping through `sed` multiple times, apply multiple expressions in one pass:
+
+```bash
+# Two separate sed calls (slower — reads file twice)
+sed 's/\r//' file.txt | sed 's/^chr//'
+
+# One sed call with two expressions (reads file once)
+sed -e 's/\r//' -e 's/^chr//' file.txt
+```
+:::
+
+## `tr` — Character Translation {#sec-tr}
+
+`tr` (translate) replaces or deletes individual characters. It does not work on patterns or fields — only single characters. It is useful for a set of classic bioinformatics tasks: complementing nucleotide sequences, removing non-printing characters, and reformatting file structure.
+
+```bash
+tr 'abc' 'ABC'              # replace a→A, b→B, c→C (character by character)
+tr -d '\r'                  # delete all carriage-return characters
+tr -s ' '                   # squeeze consecutive spaces into a single space
+tr 'a-z' 'A-Z'             # convert lowercase to uppercase
+```
+
+| Flag | Effect |
+|------|--------|
+| (none) | Replace characters in SET1 with corresponding characters in SET2 |
+| `-d` | Delete characters in SET1 |
+| `-s` | Squeeze consecutive identical characters in SET1 into one |
+| `-c` | Complement SET1 (all characters NOT in SET1) |
+
+### Bioinformatics Examples
+
+**Complement a DNA sequence (not reverse complement — just complement):**
+
+```bash
+echo "ATCGATCG" | tr 'ACGTacgt' 'TGCAtgca'
+# Output: TAGCTAGC
+```
+
+**Convert a multi-line FASTA sequence to a single line:**
+
+```bash
+# This replaces every newline with nothing, then re-adds the header newline
+# Works only for single-record FASTA files
+grep -v "^>" genome_single.fa | tr -d '\n'
+
+# For robust single-line FASTA conversion of multi-record files, use awk:
+awk '/^>/ { if (seq) print seq; print; seq="" } !/^>/ { seq = seq $0 }
+     END { if (seq) print seq }' genome.fa
+```
+
+**Remove Windows carriage returns (alternative to `sed`):**
+
+```bash
+tr -d '\r' < windows_file.txt > fixed_file.txt
+```
+
+**Convert spaces to tabs in a space-delimited file:**
+
+```bash
+tr -s ' ' '\t' < spaced_file.txt > tabbed_file.txt
+```
+
+**Count nucleotides in a sequence:**
+
+```bash
+# Count all G and C characters (pipe through grep to skip headers)
+grep -v "^>" genome.fa | tr -cd 'GCgc' | wc -c
+```
+
+## `paste` and `join` — Combining Files
+
+### `paste` — Side-by-Side Merging
+
+`paste` merges files horizontally — it reads one line from each file simultaneously and joins them with a tab (or a specified delimiter). Think of it as creating a new column from a second file.
+
+```bash
+paste file1.txt file2.txt              # merge two files side by side (tab-separated)
+paste -d ',' file1.txt file2.txt       # use comma as delimiter
+paste -d '\t' file1.txt file2.txt      # explicit tab delimiter
+paste - - < file.txt                   # merge pairs of lines (every 2 lines → 1 row)
+```
+
+**Combine sample IDs with their count files:**
+
+```bash
+# You have a list of sample names and a file with one count per line
+# (e.g., from wc -l or samtools flagstat | grep total)
+paste sample_names.txt read_counts.txt > sample_counts.tsv
+```
+
+**Convert a single-column list into two columns:**
+
+```bash
+# Pair up consecutive lines: line 1+2 → row 1, line 3+4 → row 2, etc.
+paste - - < single_column.txt > two_columns.tsv
+```
+
+### `join` — Merging on a Shared Key
+
+`join` performs a relational join on two sorted files that share a common key column. It is like a database `JOIN` operation: only lines with matching keys are merged.
+
+```bash
+join file1.txt file2.txt              # join on column 1 (both files must be sorted)
+join -1 2 -2 1 file1.txt file2.txt   # join file1 col 2 with file2 col 1
+join -t '\t' file1.txt file2.txt     # tab-delimited join
+join -a 1 file1.txt file2.txt        # left join (include unmatched from file1)
+```
+
+**Merge a sample metadata table with count data:**
+
+```bash
+# file1: sample_id, condition, replicate (sorted by sample_id)
+# file2: sample_id, read_count (sorted by sample_id)
+join -t $'\t' metadata.tsv counts.tsv > merged.tsv
+```
+
+::: {.callout-note}
+## `join` Requires Sorted Input
+
+Both files must be sorted on the join key before calling `join`. If the key is column 1 and text, `sort -k1,1` is sufficient. If your data is not sorted, `join` will silently miss matches:
+
+```bash
+sort -k1,1 metadata.tsv > metadata_sorted.tsv
+sort -k1,1 counts.tsv > counts_sorted.tsv
+join -t $'\t' metadata_sorted.tsv counts_sorted.tsv > merged.tsv
+```
+:::
+
+## Working with Compressed Files {#sec-compressed}
+
+Genomic files are large. A human genome FASTQ run can be 50–200 GB uncompressed. In practice, nearly all genomic files are stored compressed, and the Unix text tools have direct support for working with them.
+
+### `gzip` and Friends
+
+```bash
+gzip file.fastq                # compress to file.fastq.gz (removes original)
+gzip -k file.fastq             # compress but keep the original (-k = keep)
+gunzip file.fastq.gz           # decompress (removes .gz file)
+gunzip -k file.fastq.gz        # decompress but keep the .gz file
+
+zcat file.fastq.gz             # print compressed file to stdout (like cat)
+zcat file.fastq.gz | head -8   # view first 8 lines without full decompression
+zgrep "^>" file.fa.gz          # grep inside a gzipped file
+```
+
+**Always pipe through `zcat` rather than decompressing first:**
+
+```bash
+# WRONG: wastes disk space and time
+gunzip reads.fastq.gz
+wc -l reads.fastq
+gzip reads.fastq
+
+# RIGHT: decompress on the fly, no disk space wasted
+zcat reads.fastq.gz | wc -l
+echo $(($(zcat reads.fastq.gz | wc -l) / 4))    # count reads
+```
+
+**Count reads in a gzipped FASTQ:**
+
+```bash
+zcat reads.fastq.gz | grep -c "^@"
+# or:
+echo $(($(zcat reads.fastq.gz | wc -l) / 4))
+```
+
+### `bgzip` and `tabix` — Indexed Genomic Compression
+
+Standard `gzip` cannot be randomly accessed — to read line 1,000,000 you must decompress everything before it. For large VCF and BED files, this is too slow. **bgzip** (block gzip) compresses in independent blocks so random access is possible, and **tabix** creates an index that maps genomic coordinates to block positions.
+
+```bash
+# Compress a VCF with bgzip (not regular gzip!)
+bgzip variants.vcf                    # creates variants.vcf.gz
+bgzip -@ 8 variants.vcf              # use 8 threads for compression
+
+# Index with tabix (requires the file to be bgzipped AND sorted by coordinate)
+tabix -p vcf variants.vcf.gz         # index a VCF
+tabix -p bed regions.bed.gz          # index a BED file
+
+# Random access by genomic region — instant, even in a 50 GB VCF
+tabix variants.vcf.gz chr1:1000000-2000000
+tabix variants.vcf.gz chr17:43044295-43125483    # BRCA1 region
+```
+
+::: {.callout-tip}
+## Pro-Tip: Always Use `bgzip` for VCF and BED Files You Will Query Often
+
+If you will ever need to subset a VCF or BED by genomic region (which you will), compress it with `bgzip` and index with `tabix` from the start. The resulting `.vcf.gz` file is accepted by virtually every bioinformatics tool and enables instant random-access queries with `tabix`. This is the standard in modern genomics pipelines.
+
+```bash
+# The complete workflow: sort → bgzip → tabix
+sort -k1,1 -k2,2n variants_unsorted.vcf > variants_sorted.vcf
+bgzip variants_sorted.vcf
+tabix -p vcf variants_sorted.vcf.gz
+```
+:::
+
+## Real Bioinformatics Pipelines {#sec-pipelines}
+
+The true power of Unix text processing emerges when tools are chained together with pipes (`|`). Each command transforms the stream, passing its output to the next. Here are three complete mini-pipelines that answer real biological questions.
+
+### Pipeline 1: Summarize a GFF3 Annotation File
+
+**Question:** What feature types are annotated in this GFF3 file, and how many of each?
+
+```bash
+grep -v "^#" annotation.gff3 \   # strip comment/header lines
+    | cut -f3 \                   # extract field 3: feature type
+    | sort \                      # sort so identical types are adjacent
+    | uniq -c \                   # count occurrences of each type
+    | sort -rn                    # sort by count, highest first
+
+# Example output:
+# 1246238 exon
+#  741474 CDS
+#  246740 three_prime_UTR
+#  246740 five_prime_UTR
+#   62049 mRNA
+#   19938 gene
+```
+
+You can extend this to ask about a specific chromosome:
+
+```bash
+grep -v "^#" annotation.gff3 \
+    | awk -F '\t' '$1 == "chr17"' \   # filter to chromosome 17
+    | cut -f3 \
+    | sort | uniq -c | sort -rn
+```
+
+### Pipeline 2: Extract High-Quality SNPs from a VCF
+
+**Question:** Which variants on the autosomes passed quality filters, have quality ≥ 30, and are SNPs (single nucleotide, not indels)?
+
+```bash
+grep -v "^#" variants.vcf \                      # skip header lines
+    | awk -F '\t' '
+        $6 >= 30             &&                  # QUAL score at least 30
+        $7 == "PASS"         &&                  # FILTER column is PASS
+        length($4) == 1      &&                  # REF is a single nucleotide
+        length($5) == 1         ' \              # ALT is a single nucleotide
+    | cut -f1,2,4,5,6 \                          # keep CHROM, POS, REF, ALT, QUAL
+    | sort -k1,1 -k2,2n                          # sort by genomic coordinate
+
+# To also save to a file:
+grep -v "^#" variants.vcf \
+    | awk -F '\t' '$6 >= 30 && $7 == "PASS" && length($4)==1 && length($5)==1' \
+    | cut -f1,2,4,5,6 \
+    | sort -k1,1 -k2,2n \
+    > high_quality_snps.tsv
+```
+
+### Pipeline 3: Count Reads per Chromosome in a BAM File
+
+**Question:** How many reads align to each chromosome, ranked from most to least?
+
+```bash
+samtools view sample.bam \       # stream all alignments as SAM text
+    | awk -F '\t' '{ print $3 }' \   # column 3 is the reference name (RNAME)
+    | sort \                          # sort so identical chroms are adjacent
+    | uniq -c \                       # count reads per chromosome
+    | sort -rn                        # sort by count, highest first
+
+# Example output:
+# 23456789 chr1
+# 21345678 chr2
+# 18234567 chr3
+# ...
+#   456789 chrX
+#   123456 chrM
+#   234567 *          <- unmapped reads (RNAME = "*")
+```
+
+To run this on only mapped reads and exclude the unmapped (`*`) line:
+
+```bash
+samtools view -F 4 sample.bam \           # -F 4 excludes unmapped reads
+    | awk -F '\t' '{ print $3 }' \
+    | sort | uniq -c | sort -rn
+```
+
+### Pipeline 4: Find Long Intergenic Regions from a BED File
+
+**Question:** Are there genomic intervals longer than 100 kb in a BED file of gene regions?
+
+```bash
+awk -F '\t' '$3 - $2 > 100000 { print $1, $2, $3, $3-$2 }' OFS="\t" genes.bed \
+    | sort -k4,4rn \               # sort by length, longest first
+    | head -20                     # show the 20 longest
+```
+
+::: {.callout-note}
+## Pipelines Are Memory-Efficient by Design
+
+Because Unix pipes stream data one line at a time between commands, a pipeline that processes a 50 GB VCF file uses essentially no more memory than one that processes a 1 MB file. Each command in the pipeline holds only one line in memory at a time. This is fundamentally different from loading a file into Python or R, where the entire dataset must fit in RAM.
+
+This property makes Unix text-processing pipelines the right tool for tasks that would otherwise require distributed computing — as long as the operation is linear and does not require joining or sorting on multiple keys (which does require storing the full dataset).
+:::
+
+## Summary
+
+| Tool | Primary Use | Key Flags |
+|------|-------------|-----------|
+| `wc` | Count lines, words, bytes | `-l` (lines), `-c` (bytes), `-w` (words) |
+| `grep` | Search for pattern-matching lines | `-v`, `-c`, `-n`, `-i`, `-E`, `-F`, `-A/-B/-C` |
+| `cut` | Extract specific columns | `-f` (fields), `-d` (delimiter) |
+| `sort` | Sort lines | `-k`, `-n`, `-r`, `-u`, `-S`, `-t` |
+| `uniq` | Count or deduplicate adjacent lines | `-c`, `-d`, `-u` |
+| `awk` | Column-aware filtering, arithmetic, reformatting | `-F`, `NR`, `NF`, `BEGIN`, `END` |
+| `sed` | Stream editing: substitution, deletion, extraction | `s/old/new/g`, `/pattern/d`, `-n 'Np'`, `-i` |
+| `tr` | Character-level translation and deletion | `-d`, `-s`, character ranges |
+| `paste` | Merge files side by side | `-d` (delimiter) |
+| `join` | Merge files on a shared key (like SQL JOIN) | `-1`, `-2`, `-t`, `-a` |
+| `zcat` | Stream gzipped files without decompressing | (piped to other tools) |
+| `zgrep` | grep inside gzipped files | same flags as `grep` |
+| `bgzip` | Block-gzip for random-access compressed files | `-@` (threads) |
+| `tabix` | Index bgzipped files for coordinate-range queries | `-p vcf`, `-p bed` |
+
+### Key Patterns to Memorize
+
+```bash
+# Count sequences in FASTA
+grep -c "^>" genome.fa
+
+# Count reads in FASTQ
+echo $(($(wc -l < reads.fastq) / 4))
+
+# Strip VCF header and sort by coordinate
+grep -v "^#" variants.vcf | sort -k1,1 -k2,2n
+
+# Summarize any TSV column (field N) with counts
+cut -fN file.tsv | sort | uniq -c | sort -rn
+
+# Filter, extract columns, sort — the universal pipeline
+grep -v "^#" file | awk 'CONDITION' | cut -f1,2,3 | sort -k1,1 -k2,2n
+```
+
+## Exercises
+
+**Exercise 1 — FASTA Counting.**
+You have a FASTA file `proteome.fa` containing protein sequences. Write two commands: one that counts the total number of sequences, and one that prints only those header lines that contain the word "hypothetical". How many hypothetical proteins are there?
+
+**Exercise 2 — FASTQ Quality Check.**
+A FASTQ file `sample.fastq.gz` (gzipped) contains sequencing reads. Write a single pipeline that: (a) counts the total number of reads, and (b) counts how many reads contain the Illumina TruSeq adapter sequence `AGATCGGAAGAGC`. Do not decompress the file to disk.
+
+**Exercise 3 — VCF Filtering.**
+Given a VCF file `cohort.vcf`, write a pipeline that outputs only variant lines (no header) where: the chromosome is a standard autosome (chr1–chr22), the QUAL score is ≥ 50, and the FILTER column is "PASS". Sort the output by chromosome and then by position. How many variants pass all three filters?
+
+**Exercise 4 — GFF3 Annotation Summary.**
+Using `annotation.gff3`, write a pipeline to answer: How many unique gene IDs (attribute `gene_id`) are annotated on each chromosome? Hint: use `grep`, `awk`, `cut`, `sort`, and `uniq -c`. Present your results sorted from chromosome with the most genes to fewest.
+
+**Exercise 5 — BED Interval Analysis.**
+You have a BED file `peaks.bed` from a ChIP-seq experiment. Write commands to:
+
+a. Count the total number of peaks.
+b. Find all peaks longer than 2 kb (BED coordinates are 0-based half-open: length = column 3 − column 2).
+c. Print the chromosome and length of the 10 longest peaks, sorted longest first.
+
+**Exercise 6 — SAM/BAM Read Statistics.**
+Using `samtools view sample.bam`, write pipelines to:
+
+a. Count how many reads map to each chromosome, sorted from most to fewest.
+b. Extract all reads with mapping quality (column 5) ≥ 30 and count them.
+c. Find the distribution of read lengths (column 10 contains the sequence).
+
+**Exercise 7 — File Format Conversion.**
+A collaborator sends you a GTF file `genes.gtf`. You need a BED file of just the gene-level records (field 3 == "gene") with the columns: chromosome, start (0-based), end, gene name (from the `gene_name` attribute in field 9), score (set to 0), and strand (field 7). Write a single `awk` command that produces this BED file.
+
+**Exercise 8 — Chromosome Name Standardization.**
+You have two VCF files: `ucsc.vcf` (chromosomes named `chr1`, `chr2`, ...) and `ensembl.vcf` (chromosomes named `1`, `2`, ...). Write `sed` commands to: (a) convert `ucsc.vcf` to Ensembl-style naming (remove the `chr` prefix from non-header lines), and (b) convert `ensembl.vcf` to UCSC-style naming (add `chr` prefix to non-header lines). Verify your result by comparing the chromosome columns with `cut -f1`.
+
+## Further Reading
+
+Compeau and Pevzner's *Bioinformatics Algorithms: An Active Learning Approach*
+[@bioinformatics_algorithms] is a strong companion volume for thinking about
+the structure of biological strings underneath the text-processing tools in
+this chapter — pattern matching, alignment, and assembly — without leaving
+the question of "is this useful?" behind.
+
+For deeper coverage of the individual tools, the canonical references are
+the GNU manuals: `man grep`, `man awk`, `info awk` (for the GNU awk extensions
+beyond POSIX), `man sed`, and `man bash`. Stéphane Chazelas's
+[Stack Overflow answers](https://unix.stackexchange.com/users/22565/st%C3%A9phane-chazelas)
+are an unmatched resource for shell-tool subtleties; if a tricky `awk` or
+`sed` question already exists on the Unix Stack Exchange, his answer is
+usually the correct one.
+
+The `bcftools`, `samtools`, and `seqkit` documentation each provide a tour
+of high-level operations on VCF, BAM/CRAM, and FASTA/FASTQ that complement
+the generic Unix tools shown here. When a generic pipeline becomes hard to
+read, a domain-specific tool is usually the right replacement.

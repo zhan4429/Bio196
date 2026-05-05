@@ -1,0 +1,982 @@
+# SSH for Bioinformaticians: Config, Keys, and the Things That Actually Break
+
+Every chapter in Part VI assumes one quietly heroic thing: that you can type `ssh
+user@cluster` and end up at a usable shell on the other side. The HPC user
+documentation at every institution starts the same way — a short paragraph titled
+*Connecting to the Cluster* with one example command and a cheerful invitation to
+"contact us if you have problems." In practice, the gap between that documentation and
+a working connection is where new HPC users spend their first miserable week. The login
+node demands a key the new user has not generated. The institution requires Duo
+two-factor authentication that the docs forgot to mention. The compute node is on a
+private network behind a bastion host that nobody told you about. The key was generated
+on the laptop but never copied to the cluster. The key was copied but the file
+permissions are `0644` and `sshd` is silently refusing it. The connection works from
+the office but not from a hotel where outbound port 22 is blocked. VS Code Remote-SSH
+fails with an opaque error about an "extension host" that has no obvious analog in any
+standard SSH manual.
+
+This chapter is about closing that gap. SSH is the single most important piece of
+infrastructure in a working bioinformatician's day — it is the connection over which
+you submit jobs, edit code, transfer terabytes, tunnel Jupyter sessions, and run
+agentic AI tools. When SSH is working you do not think about it. When it is not, no
+other work happens. The good news is that SSH is well-documented, predictable, and
+once configured rarely needs to be touched again. The trick is the configuration.
+
+A working `~/.ssh/config` is the difference between typing
+`ssh -i ~/.ssh/id_ed25519_hpc -p 2022 -J jump.cluster.edu yzhang@compute-01.private.cluster.edu`
+fifty times a day and typing `ssh hpc`. We will get you to the second one.
+
+## Learning Goals
+
+By the end of this chapter, you should be able to:
+
+1. Generate an Ed25519 SSH key pair, set the correct file permissions, and explain
+   what the public and private halves do.
+2. Install your public key on a remote host, both with `ssh-copy-id` and by editing
+   `~/.ssh/authorized_keys` directly.
+3. Write a `~/.ssh/config` file with `Host` aliases, `IdentityFile` entries, and
+   per-host options so that day-to-day commands are short and consistent.
+4. Use `ssh-agent`, `ssh-add`, and the `AddKeysToAgent` directive to enter your
+   passphrase once per session instead of once per connection.
+5. Connect through bastion / jump hosts using `ProxyJump`, and re-use a single SSH
+   connection across many sessions with `ControlMaster`.
+6. Transfer files reliably using `rsync` over SSH, including resumable transfers for
+   multi-terabyte sequencing datasets.
+7. Set up a port-forwarding tunnel to access a Jupyter or RStudio Server running on
+   an HPC compute node from your laptop browser.
+8. Diagnose the most common SSH error messages — `Permission denied (publickey)`,
+   `Host key verification failed`, "permissions are too open" — and fix them.
+
+## How SSH Actually Works
+
+SSH (Secure Shell) is a protocol for running a shell, transferring files, or forwarding
+network traffic over an encrypted connection between a **client** (your laptop) and a
+**server** (the HPC login node). You do not need to understand the cryptography in
+detail to use SSH well, but two ideas earn their keep.
+
+**Public-key cryptography** is a system in which a key pair consists of two
+mathematically linked files: a *private key* that you keep secret and never share, and
+a *public key* that you can hand to anyone. Anything encrypted with the public key can
+be decrypted only with the private key, and a signature made with the private key can
+be verified using only the public key. SSH uses this so the server can prove you hold
+the private key without you ever sending it across the network.
+
+**Host keys** are the server's identity. The first time you connect to a server, your
+client receives the server's public host key and asks you to confirm a fingerprint.
+Once you accept, that fingerprint is stored in `~/.ssh/known_hosts`. On every future
+connection, the client verifies that the server still presents the same key. If the key
+changes — perhaps because the cluster was rebuilt, or perhaps because someone is
+attempting a man-in-the-middle attack — SSH refuses to connect until you investigate.
+
+The two key concepts together give you the table below.
+
+| Key | Lives on | Used to prove |
+|---|---|---|
+| Your **private key** (`~/.ssh/id_ed25519`) | Your laptop only | *You* are who you say you are |
+| Your **public key** (`~/.ssh/id_ed25519.pub`) | Pasted into the server's `~/.ssh/authorized_keys` | The server can verify *you* |
+| Server **host key** (`/etc/ssh/ssh_host_ed25519_key`) | The HPC server only | The server can prove *its* identity to you |
+| Server **host public key** (your `~/.ssh/known_hosts`) | Your laptop, after first connection | You can verify the *server* on every reconnect |
+
+A typical login goes:
+
+```
+[your laptop]                              [hpc.cluster.edu]
+     |                                            |
+     |  TCP connect to port 22  ───────────────►  |
+     |  ◄──── server presents host public key  ── |
+     |  (laptop checks against known_hosts)       |
+     |                                            |
+     |  ──── "I am yzhang"  ───────────────────►  |
+     |  ◄──── challenge for yzhang's key  ──────  |
+     |  (laptop signs with private key)           |
+     |  ──── signature  ───────────────────────►  |
+     |                              (sshd checks  |
+     |                               authorized_  |
+     |                               keys)        |
+     |  ◄──── encrypted shell session  ─────────  |
+```
+
+Everything else in this chapter — agents, jump hosts, tunnels, multiplexing — is built
+on top of this same handshake.
+
+## Generating Your Key Pair
+
+In 2026, the right key type to generate is **Ed25519**. It is faster, smaller, and based
+on a more modern elliptic-curve construction than the older RSA keys that still appear
+in many institutional documentation pages. RSA is still supported by every SSH server,
+but a 4096-bit RSA key is roughly ten times larger than an Ed25519 key and offers no
+practical security advantage. Use Ed25519 unless you are forced into RSA by an ancient
+appliance.
+
+Generate a new key with `ssh-keygen`:
+
+```bash
+ssh-keygen -t ed25519 -C "yzhang@tufts.edu Tufts HPC 2026-04"
+```
+
+The `-C` flag adds a comment that appears at the end of the public key. Use it to record
+*who* the key belongs to and *when* it was generated — this is invaluable when you have
+six keys for six clusters and need to identify which one is which two years later.
+
+`ssh-keygen` will prompt you for a file location and a passphrase:
+
+```text
+Enter file in which to save the key (/home/yzhang/.ssh/id_ed25519):
+Enter passphrase (empty for no passphrase):
+Enter same passphrase again:
+```
+
+**Always set a passphrase.** A private key without a passphrase is a plain-text password
+sitting on your laptop's disk. If your laptop is stolen or compromised, an empty
+passphrase means the attacker has immediate access to every server where your key is
+installed. With a passphrase, the private key is encrypted at rest; the attacker has to
+crack it before the key is useful. We will use `ssh-agent` shortly so you only type the
+passphrase once per session, not once per connection.
+
+After `ssh-keygen` runs, you have two files:
+
+| File | Permission | Contents |
+|---|---|---|
+| `~/.ssh/id_ed25519` | `600` (read/write for owner only) | Private key — never share |
+| `~/.ssh/id_ed25519.pub` | `644` (readable by all) | Public key — paste anywhere |
+
+The `~/.ssh` directory itself must be `700` (only your user can enter it). On a fresh
+account, this is set automatically by `ssh-keygen`, but if you ever copy your `~/.ssh`
+directory between machines or unzip a backup, the permissions can come out wrong. SSH
+*refuses to use* a private key whose permissions are too permissive, and the error
+message is one of the most common entries in any HPC help desk's queue:
+
+```text
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+Permissions 0644 for '/home/yzhang/.ssh/id_ed25519' are
+too open.
+It is required that your private key files are NOT
+accessible by others.
+```
+
+The fix is one line:
+
+```bash
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/id_ed25519
+chmod 644 ~/.ssh/id_ed25519.pub
+chmod 600 ~/.ssh/config           # if you have one
+chmod 600 ~/.ssh/authorized_keys  # on any server
+chmod 644 ~/.ssh/known_hosts
+```
+
+::: {.callout-warning}
+## The Private Key Never Leaves Your Laptop
+
+There is exactly one operation in the SSH workflow that involves the private key
+file: your local SSH client reads it (or the agent reads it once) and uses it to sign
+challenges. The private key is *never* sent over the network, *never* uploaded to a
+server, and *never* embedded in a Git repository. If a documentation page asks you to
+"upload your private key" anywhere, that documentation is wrong. The only file that
+goes on remote servers is the **public** half (`id_ed25519.pub`).
+:::
+
+## Installing Your Key on a Remote Host
+
+For the server to recognize your key, it must contain your public key in
+`~/.ssh/authorized_keys` for the account you are logging in as. The standard tool for
+installing a key is `ssh-copy-id`:
+
+```bash
+ssh-copy-id -i ~/.ssh/id_ed25519.pub yzhang@hpc.cluster.edu
+```
+
+`ssh-copy-id` will prompt for your password (this is the one-and-only time you should
+need it) and then append your public key to the remote `~/.ssh/authorized_keys`,
+creating the file with correct permissions if it does not exist. Test by reconnecting:
+the server should authenticate using your key without asking for a password.
+
+When `ssh-copy-id` Is Not Available
+
+Some clusters, especially those that require Duo or some other two-factor on every
+password login, will not let `ssh-copy-id` work cleanly. Other environments — Windows
+without a Unix shell, restricted appliances, or shared accounts where you do not have
+write access via SSH — require manual installation. The procedure is short:
+
+```bash
+# 1. On your laptop, copy the public key to your clipboard or screen
+cat ~/.ssh/id_ed25519.pub
+
+# 2. SSH to the cluster (using your password, or a web terminal, or whatever
+#    you currently have)
+ssh yzhang@hpc.cluster.edu
+
+# 3. On the cluster, set up the directory and append the key
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+echo "ssh-ed25519 AAAAC3Nza... yzhang@tufts.edu" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
+The `authorized_keys` file is a plain text file with **one public key per line**. Each
+line has three whitespace-separated fields: the key type (`ssh-ed25519`), the base64
+key data, and the comment. There can be many lines — one per device or institution —
+and you can edit the file with any text editor. When the server authenticates a login,
+it tries every key in the file until one matches.
+
+::: {.callout-tip}
+## Pro-Tip: Use One Key Per Laptop, Not One Key Per Cluster
+
+A common new-user mistake is to generate a fresh key on every cluster they join,
+ending up with `id_ed25519_tufts`, `id_ed25519_xsede`, `id_ed25519_aws`, and a tangle
+of `IdentityFile` entries. The cleaner pattern is one key per *device* (your laptop,
+your desktop, your phone) installed on every cluster you use. When you lose a laptop
+or leave an institution, you revoke or remove that one key from every
+`authorized_keys` file. The unit of trust is the device that holds the private key,
+not the cluster the key talks to.
+:::
+
+## Per-Host Configuration with `~/.ssh/config`
+
+`~/.ssh/config` is the single most under-taught skill in HPC training. It lets you
+define short aliases, default options, and per-host overrides for every cluster you
+use, so that day-to-day commands shrink from a paragraph to a word.
+
+The file is read top-to-bottom by the SSH client every time you run `ssh`, `scp`,
+`sftp`, or `rsync -e ssh`. Each block starts with `Host <pattern>` and lists indented
+options that apply when the pattern matches the destination you typed.
+
+A real-world block for a Tufts HPC user might look like this:
+
+```sshconfig
+# ── Tufts HPC ────────────────────────────────────────────────────────────
+Host hpc
+    HostName              login.pax.tufts.edu
+    User                  yzhang
+    Port                  22
+    IdentityFile          ~/.ssh/id_ed25519
+    IdentitiesOnly        yes
+    ForwardAgent          no
+    ServerAliveInterval   60
+    ServerAliveCountMax   3
+    ControlMaster         auto
+    ControlPath           ~/.ssh/cm/%r@%h:%p
+    ControlPersist        10m
+```
+
+With this in place, all of these commands now work and refer to the same login node:
+
+```bash
+ssh hpc
+scp counts.tsv hpc:/scratch/yzhang/rnaseq/
+rsync -av results/ hpc:/scratch/yzhang/rnaseq/results/
+sftp hpc
+```
+
+What each option does:
+
+| Option | Meaning |
+|---|---|
+| `HostName` | The actual DNS name to connect to. The `Host` line is your alias; `HostName` is the truth. |
+| `User` | Remote username. Without this, SSH uses your local username. |
+| `Port` | TCP port. Defaults to 22. Some sites use a non-standard port (often 2022) to reduce log noise from internet scanners. |
+| `IdentityFile` | Which private key to offer. You can repeat this option to try several. |
+| `IdentitiesOnly yes` | Offer **only** the keys listed in this block, not every key your agent knows about. Prevents "too many authentication failures" errors when you have many keys. |
+| `ForwardAgent` | Whether to forward your agent to the remote host. Default `no`; see the warning later. |
+| `ServerAliveInterval` | Seconds between keep-alive packets from the client to the server. `60` keeps NAT routers from dropping idle connections. |
+| `ServerAliveCountMax` | How many missed keep-alives before the client gives up. With `Interval 60` and `CountMax 3`, the client disconnects after 3 minutes of silence. |
+| `ControlMaster` / `ControlPath` / `ControlPersist` | Connection multiplexing. Discussed in detail below. |
+
+You can also use wildcards. The block below applies sensible defaults to *every*
+host, and the more specific blocks above can override individual options:
+
+```sshconfig
+# ── Defaults for every host ─────────────────────────────────────────────
+Host *
+    AddKeysToAgent       yes
+    UseKeychain          yes        # macOS only; integrates with Keychain
+    ServerAliveInterval  60
+    HashKnownHosts       no         # set to yes for stricter privacy
+```
+
+::: {.callout-note}
+## Order Matters in `ssh_config`
+
+When several blocks match a host, SSH uses the *first* value it sees for each
+option. A common mistake is putting `Host *` defaults at the top and then
+overriding them in a more specific block — the override is ignored. Either put
+specific blocks first and the wildcard last, or restructure so each option
+appears only once on the path that matches.
+:::
+
+A more complete `~/.ssh/config` for a working bioinformatician might look like:
+
+```sshconfig
+# ── Defaults ────────────────────────────────────────────────────────────
+Host *
+    AddKeysToAgent      yes
+    UseKeychain         yes
+    ServerAliveInterval 60
+    ControlMaster       auto
+    ControlPath         ~/.ssh/cm/%r@%h:%p
+    ControlPersist      10m
+
+# ── Tufts HPC ──────────────────────────────────────────────────────────
+Host hpc
+    HostName     login.pax.tufts.edu
+    User         yzhang
+    IdentityFile ~/.ssh/id_ed25519
+
+# ── A compute node behind the login node ───────────────────────────────
+# Reach an interior node only routable from the login host.
+Host hpc-compute-*
+    User       yzhang
+    ProxyJump  hpc
+    IdentityFile ~/.ssh/id_ed25519
+
+# ── A collaborator's institution ───────────────────────────────────────
+Host bigsky
+    HostName   login01.bigsky.example.edu
+    User       y_zhang
+    Port       2022
+    IdentityFile ~/.ssh/id_ed25519
+
+# ── Personal cloud VM ──────────────────────────────────────────────────
+Host devbox
+    HostName   18.222.13.45
+    User       ubuntu
+    IdentityFile ~/.ssh/id_ed25519_aws
+    IdentitiesOnly yes
+```
+
+Before this file existed, every interaction with a different cluster required a long
+command line and a moment of remembering the right username, port, and key. After it
+exists, every command is one short word.
+
+## `ssh-agent` and Key Forwarding
+
+You set a passphrase on your private key. You should not have to type it every time
+you run `ssh hpc`. The mechanism that solves this is **ssh-agent**, a small background
+program that holds decrypted private keys in memory for the duration of your login
+session.
+
+The workflow:
+
+```bash
+# Start the agent (most desktop OSes do this for you on login)
+eval "$(ssh-agent -s)"
+
+# Add a key to the agent — this prompts for the passphrase once
+ssh-add ~/.ssh/id_ed25519
+
+# Now every ssh/scp/rsync command uses the loaded key without prompting
+ssh hpc
+```
+
+If you have `AddKeysToAgent yes` in your `~/.ssh/config`, the agent is updated
+automatically on first use of a key — you do not need to remember to run `ssh-add`.
+
+On macOS, `UseKeychain yes` causes the OS to remember the passphrase across reboots in
+the system Keychain, so you type it exactly once, ever. On Linux desktops, `gnome-
+keyring` and `kwallet` provide similar integration. On Windows, the OpenSSH agent
+service serves the same purpose; enable it once and it persists.
+
+To see what keys are loaded:
+
+```bash
+ssh-add -l                 # list fingerprints of loaded keys
+ssh-add -L                 # list full public keys
+ssh-add -D                 # remove all keys from the agent
+ssh-add -t 28800 ~/.ssh/id_ed25519   # add for 8 hours, then auto-expire
+```
+
+### Agent Forwarding (and Why It's a Liability)
+
+`ForwardAgent yes` (or the `-A` flag) tells SSH to forward your local agent to the
+remote host. This means a process on the *remote* host can talk to your *local* agent
+and ask it to sign things — for example, to make further SSH connections to a third
+host using your local keys, without needing the keys themselves to live on the remote.
+
+This is genuinely useful. The most common case in bioinformatics is `git pull` from
+GitHub on a cluster: with agent forwarding, the cluster can authenticate to GitHub
+using your local SSH key without the key ever being copied to the cluster.
+
+It is also a security exposure. Anyone with root access on the remote host — or any
+attacker who has compromised it — can use the forwarded agent socket to authenticate
+as you to anything else your agent can talk to. On a shared HPC login node, that
+"anyone with root" includes the system administrators by definition.
+
+::: {.callout-warning}
+## Be Selective About Agent Forwarding
+
+Default `ForwardAgent` to `no` and enable it only on hosts you trust. The `-A`
+command-line flag is a useful one-off escape hatch when you really do need to push
+to GitHub from the cluster. Even better is `ForwardAgent yes` only for specific
+known-good hosts, or use `IdentityAgent` plus a per-host agent socket so you can
+limit which keys are exposed.
+:::
+
+A safer pattern for the GitHub case is to install a *deploy key* on the cluster
+specifically for the project, with no passphrase but limited to read-only access on
+one repository. This avoids forwarding entirely.
+
+## Jump Hosts and `ProxyJump`
+
+Many HPC environments do not let you SSH directly to compute or interior service
+nodes. Instead, you must first SSH to a public-facing **bastion** or **login node**,
+and from there onward to your intended target. The classical way to do this is to
+manually run two commands:
+
+```bash
+ssh hpc                  # land on the login node
+ssh compute-01           # then jump from login to compute
+```
+
+The modern way, available since OpenSSH 7.3, is **ProxyJump**:
+
+```bash
+ssh -J yzhang@login.pax.tufts.edu compute-01.private.cluster.edu
+```
+
+`-J` tells your local SSH client to first connect to the jump host and then tunnel a
+second SSH connection through it to the final destination. The end result is a single
+shell on `compute-01`. Authentication happens *separately* against each hop, using
+your local keys; the jump host never sees your private key, only forwards encrypted
+traffic.
+
+Of course, you do not want to type that long command. Put it in `~/.ssh/config`:
+
+```sshconfig
+Host hpc
+    HostName     login.pax.tufts.edu
+    User         yzhang
+    IdentityFile ~/.ssh/id_ed25519
+
+Host compute-*
+    User         yzhang
+    ProxyJump    hpc
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+Now `ssh compute-01` does the right thing automatically, including the jump through
+`hpc`. `scp` and `rsync` work too:
+
+```bash
+rsync -av results/ compute-01:/scratch/yzhang/results/
+```
+
+::: {.callout-note}
+## `ProxyJump` Replaces `ProxyCommand`
+
+Older tutorials show a `ProxyCommand ssh -W %h:%p hpc` recipe to achieve the same
+effect. `ProxyJump` is a cleaner, well-tested replacement and is the recommended
+form on any OpenSSH 7.3 (2016) or newer. The `ProxyCommand` form is still useful
+when you need to pipe through a non-SSH tool, like `cloudflared` for a Cloudflare
+Tunnel — but for SSH-to-SSH hops, prefer `ProxyJump`.
+:::
+
+You can chain jumps for very locked-down networks:
+
+```bash
+ssh -J jump1,jump2 final-target
+```
+
+or in config:
+
+```sshconfig
+Host final-target
+    ProxyJump jump1,jump2
+```
+
+## Connection Multiplexing
+
+Every new SSH connection has a startup cost: TCP handshake, key exchange, authentication
+(possibly with two-factor), shell setup. On a high-latency network or a 2FA-protected
+cluster, this can be three to ten seconds *per connection*. A loop that runs `ssh hpc
+"squeue -u yzhang"` once a minute, or an `rsync` that opens dozens of parallel SSH
+connections under the hood, pays this cost over and over.
+
+**Connection multiplexing** lets the client open one master connection and route many
+subsequent sessions through it. Subsequent sessions skip the handshake entirely —
+they are functionally instant.
+
+Add this to a `Host` block (or to `Host *` for everywhere):
+
+```sshconfig
+ControlMaster   auto
+ControlPath     ~/.ssh/cm/%r@%h:%p
+ControlPersist  10m
+```
+
+What each line does:
+
+- **`ControlMaster auto`**: if no master connection exists yet for this destination,
+  create one; otherwise reuse it.
+- **`ControlPath`**: where to put the Unix-domain socket that subsequent sessions use
+  to attach to the master. The `%r@%h:%p` template gives a unique socket per
+  user/host/port combination.
+- **`ControlPersist 10m`**: keep the master alive for 10 minutes after the last
+  session disconnects. Lets a quick subsequent reconnect avoid the full handshake.
+
+You need to create the directory once:
+
+```bash
+mkdir -p ~/.ssh/cm
+chmod 700 ~/.ssh/cm
+```
+
+Test the difference. With multiplexing off:
+
+```bash
+time ssh hpc echo hi      # ~3 seconds
+time ssh hpc echo hi      # ~3 seconds again
+```
+
+With multiplexing on, after the first connection sets up the master:
+
+```bash
+time ssh hpc echo hi      # ~3 seconds (sets up master)
+time ssh hpc echo hi      # ~0.05 seconds (reuses master)
+```
+
+For a `rsync`, `scp`, or scripted loop that opens hundreds of short SSH sessions, the
+speedup is dramatic.
+
+::: {.callout-warning}
+## Multiplexing Is a Footgun on Shared Workstations
+
+The control socket is a Unix file in your home directory. Anyone who can read your
+home directory and connect to that socket can reuse your authenticated SSH
+connection without re-authenticating. On a shared lab machine where other accounts
+have read access to your homedir (rare but it happens), turn multiplexing off, or
+put the `ControlPath` somewhere only you can reach. On your own laptop, this is not
+a meaningful concern.
+:::
+
+You can manage the master connection explicitly:
+
+```bash
+ssh -O check hpc           # is the master alive?
+ssh -O exit hpc            # tear down the master immediately
+```
+
+Tearing down is occasionally necessary if a network change has left the master in a
+half-broken state and new connections start hanging.
+
+## File Transfer Over SSH
+
+SSH carries more than interactive shells. Three closely related tools — `scp`, `sftp`,
+and `rsync` — handle file transfer, all over the same SSH connection.
+
+### `scp`: Simple, Now Slightly Deprecated
+
+`scp` was for many years the default tool for one-off file copies:
+
+```bash
+scp counts.tsv hpc:/scratch/yzhang/rnaseq/
+scp -r results/ hpc:/scratch/yzhang/rnaseq/results/
+scp hpc:/scratch/yzhang/results/de_results.tsv ./
+```
+
+Beginning with OpenSSH 9.0 (April 2022), `scp` switched its default transport from
+the legacy SCP protocol to SFTP under the hood. The user-facing command is the same,
+but the change fixed a long-standing class of subtle bugs around filenames containing
+shell metacharacters. The OpenSSH project now considers the SCP protocol "outdated,
+inflexible, and not readily fixed" and recommends migrating to `sftp` or `rsync` for
+new work.
+
+For a single small file with a simple name, `scp` is fine. For anything else, prefer
+`rsync` (for sync semantics) or `sftp` (for interactive transfer).
+
+### `sftp`: Interactive Transfer
+
+`sftp` opens an SSH session that exposes a small FTP-like interface for browsing
+remote directories and copying files:
+
+```bash
+sftp hpc
+sftp> cd /scratch/yzhang/rnaseq
+sftp> ls
+sftp> get results.tsv          # download
+sftp> put samples.csv          # upload
+sftp> mput *.bam               # upload many
+sftp> bye
+```
+
+It is useful when you do not know exactly which files you want, or when you want to
+poke around interactively without keeping a shell open.
+
+### `rsync`: The Workhorse
+
+For any non-trivial transfer — multiple files, large directories, anything you might
+need to resume — `rsync` is the right tool. `rsync` only transfers what has changed,
+preserves permissions and timestamps, can resume interrupted transfers, and over SSH
+gets all of SSH's encryption and authentication for free.
+
+The everyday invocation:
+
+```bash
+rsync -av --partial --progress -e ssh \
+    /local/path/ hpc:/scratch/yzhang/path/
+```
+
+| Flag | Effect |
+|---|---|
+| `-a` | Archive mode: recursive + preserves permissions, timestamps, symlinks, etc. |
+| `-v` | Verbose: show files being transferred. |
+| `--partial` | Keep partially-transferred files on interruption so a re-run resumes. |
+| `--progress` | Show per-file progress (use `-P` as a shortcut for `--partial --progress`). |
+| `-e ssh` | Use SSH as the transport. Default since rsync 2.6.0; explicit `-e ssh` lets you pass extra ssh flags, e.g., `-e "ssh -i ~/.ssh/special_key"`. |
+| `-z` | Compress in transit. Useful for slow networks; usually not worth it on fast intra-campus links. |
+| `--checksum` | Compare files by checksum instead of size+mtime. Slow but rigorous; useful when you suspect corruption. |
+| `--delete` | Delete files on the destination that no longer exist on the source. Essential for true mirroring; dangerous if you ever get the direction backwards. |
+
+::: {.callout-warning}
+## Trailing Slashes Decide What Gets Copied
+
+`rsync -av /data/ hpc:/scratch/data/` copies *the contents of* `/data/` into
+`/scratch/data/`. `rsync -av /data hpc:/scratch/data/` copies *the directory
+itself*, creating `/scratch/data/data/`. The trailing `/` on the *source* is the
+difference. This bites everyone at least once. Do a `--dry-run` first:
+
+```bash
+rsync -av --dry-run --partial --progress \
+    /local/path/ hpc:/scratch/yzhang/path/
+```
+:::
+
+For selective transfer, `--include` and `--exclude` filter what `rsync` considers:
+
+```bash
+# Transfer only fastq files from a deeply nested directory
+rsync -av --partial --progress \
+    --include='*/' --include='*.fastq.gz' --exclude='*' \
+    /local/seq_run/ hpc:/scratch/yzhang/run01/
+
+# Transfer everything except large intermediate BAM files
+rsync -av --partial --progress \
+    --exclude='*.bam' --exclude='*.bam.bai' \
+    /local/results/ hpc:/scratch/yzhang/results/
+```
+
+For the largest transfers — terabyte-scale, cross-institution, intermittent network —
+`rsync` will work but Globus is usually better; see Chapter 13's *Data Transfer*
+section.
+
+## Tunnels: Port Forwarding for Jupyter, RStudio, and Friends
+
+A common HPC scenario: you have started a Jupyter Lab server on a compute node so it
+has access to the cluster's CPU, memory, and GPU resources. Jupyter is listening on
+port 8888 of the compute node, but the compute node is on a private network and has
+no route from your laptop. You want to open `http://localhost:8888` in your laptop
+browser and have it land on that Jupyter server.
+
+The mechanism is **local port forwarding**, expressed with the `-L` flag:
+
+```
+ssh -L LOCAL_PORT:REMOTE_HOST:REMOTE_PORT user@gateway
+```
+
+This tells the SSH client to listen on `LOCAL_PORT` on your laptop. Anything that
+connects to that local port is tunneled through the SSH connection to `gateway`, and
+from `gateway` is forwarded to `REMOTE_HOST:REMOTE_PORT`.
+
+A complete worked example for a Jupyter Lab session on an HPC compute node:
+
+```bash
+# ── Step 1: On the cluster, request an interactive job and start Jupyter ──
+ssh hpc
+srun --pty -p batch -c 4 --mem=16G -t 4:00:00 /bin/bash
+# (now on a compute node, e.g., compute-042)
+
+module load python/3.12
+jupyter lab --no-browser --ip=0.0.0.0 --port=8888
+# Note the line that says: http://compute-042:8888/?token=abc123...
+```
+
+Jupyter prints a URL with a token. Keep that terminal open and copy the token.
+
+```bash
+# ── Step 2: On your laptop, open the tunnel through the login node ──────
+ssh -N -L 8888:compute-042:8888 hpc
+```
+
+The flags:
+
+- `-N` says "do not run a remote command" — we only want the tunnel, not a shell.
+- `-L 8888:compute-042:8888` listens on local port 8888, forwards through `hpc`, and
+  connects from `hpc` to `compute-042:8888`. Note that `compute-042` is resolved on
+  the *cluster's* internal DNS, not your laptop's.
+
+Leave that terminal alone — closing it kills the tunnel.
+
+```bash
+# ── Step 3: Open in your laptop browser ─────────────────────────────────
+# http://localhost:8888/?token=abc123...
+```
+
+Your browser connects to `localhost:8888`, the SSH tunnel forwards through `hpc` to
+`compute-042:8888`, and Jupyter responds. The browser thinks it is talking to a local
+service; the kernel actually has 4 cores and 16 GB on the cluster.
+
+This pattern works for RStudio Server (port 8787), TensorBoard (6006), MLflow (5000),
+PyMOL remote, IGV, or anything else that listens on a TCP port.
+
+::: {.callout-tip}
+## Pro-Tip: Bake Common Tunnels Into `~/.ssh/config`
+
+If you launch the same tunnel daily, define it in config and skip the long
+command:
+
+```sshconfig
+Host hpc-jupyter
+    HostName     login.pax.tufts.edu
+    User         yzhang
+    IdentityFile ~/.ssh/id_ed25519
+    LocalForward 8888 compute-042:8888
+    LocalForward 8787 compute-042:8787
+```
+
+Then `ssh hpc-jupyter` opens both forwards. Combine with `-N` if you only want the
+tunnel and no shell.
+:::
+
+### Remote Forwarding (`-R`): The Other Direction
+
+Less common, but worth knowing about: `-R` does the reverse. It listens on a port on
+the *remote* host and forwards traffic back to your laptop. The classic use case is
+exposing a development service running on your laptop to a teammate on a shared
+server, or punching a return path through a NAT for testing webhooks. In day-to-day
+bioinformatics, `-L` is the one you will use; `-R` exists, mostly for completeness.
+
+## VS Code Remote-SSH and Cursor
+
+By 2026, the dominant interactive HPC editing experience is **VS Code Remote-SSH** (or
+**Cursor**, which is a fork of VS Code with the same Remote-SSH machinery). Instead of
+editing files locally and re-uploading, or struggling with `vim` over a slow link, you
+open a window of VS Code on your laptop that runs a small server on the cluster and
+edits files in place at near-local speed, with full IDE features.
+
+Both tools read your `~/.ssh/config`. Once `ssh hpc` works from a terminal, opening
+`hpc` from VS Code's "Connect to Host" command also works, because it is the same
+config file. This is one of the cleanest reasons to invest in your SSH config: every
+SSH-aware tool inherits it for free.
+
+The first time you connect, VS Code installs its server-side component into
+`~/.vscode-server/` (Cursor uses `~/.cursor-server/`). On subsequent connections, only
+the changed extensions are updated.
+
+::: {.callout-warning}
+## VS Code Server Will Eat Your Home Quota
+
+`~/.vscode-server` and `~/.cursor-server` quietly accumulate hundreds of megabytes
+to several gigabytes of binaries, extensions, and caches. On HPC clusters where
+home directories have small quotas (5–50 GB) and contain conda environments and
+project scripts, this is enough to silently push you over quota and break unrelated
+jobs. Two mitigations:
+
+- Periodically clean up old server installs:
+  `rm -rf ~/.vscode-server/data/CachedExtensionVSIXs ~/.vscode-server/extensions/*-old`
+- Symlink the server directory to scratch:
+  `mv ~/.vscode-server /scratch/$USER/.vscode-server &&`
+  `ln -s /scratch/$USER/.vscode-server ~/.vscode-server`
+  (note: only if scratch is *not* purged aggressively, or you accept the cost of
+  re-installing on purge).
+:::
+
+The other VS Code Remote pitfall worth mentioning: an extension that runs a heavy
+process (a language server, an AI coding assistant doing project-wide indexing) runs
+that process on the **server side**, which on an HPC cluster means the **login
+node**. This is exactly the "do not run computation on the login node" violation that
+Chapter 13 warns against. For heavy work, attach VS Code to an interactive Slurm
+session on a compute node instead, e.g., by SSH-ing into the node directly via
+`ProxyJump`.
+
+## Two-Factor Authentication on HPC
+
+Most universities and many research institutions now require two-factor
+authentication (2FA) — Duo, Microsoft Authenticator, Yubikey, or institution-issued
+TOTP — on every interactive login. From the SSH perspective, 2FA is added by an
+extra `pam_duo`-like module on the server side. After your key authenticates, the
+server prompts for a second factor.
+
+This is a feature, not a bug, but it can be friction-heavy if you are not prepared:
+
+- Every new SSH connection prompts for 2FA. A 96-task `rsync` opening dozens of
+  parallel SSH children prompts dozens of times.
+- Long-running scripts that re-SSH periodically (e.g., a checker that runs `squeue`
+  every minute) will pile up Duo pushes.
+- IDE-based remote tools (VS Code, Cursor) sometimes open many connections during
+  startup.
+
+The single most important mitigation is **connection multiplexing** (`ControlMaster`,
+above). With multiplexing on, you authenticate once — including the 2FA push — and
+every subsequent session reuses the master without re-prompting.
+
+You generally **cannot** automate around 2FA, by design. The point of the second
+factor is that it is something you *have* (your phone, a hardware token), and a
+script cannot have it. Patterns that try to script around 2FA — bots that
+auto-approve Duo pushes, scripts that pre-fill TOTP codes — defeat the purpose and
+violate every institution's acceptable-use policy. The right answer is:
+
+1. Enable `ControlMaster` so each interactive session prompts at most once.
+2. For unattended workloads, use the cluster's actual scheduler (`sbatch`) rather
+   than long-running SSH sessions from your laptop.
+3. For `rsync` and `scp`, the multiplexed master makes sub-second restarts free.
+4. For genuinely unattended pipelines that need to run for days, deploy them as a
+   workflow manager job *on* the cluster (Snakemake or Nextflow inside a Slurm
+   submission), not as something your laptop drives.
+
+## Common Errors and What They Actually Mean
+
+The error messages SSH produces are accurate but cryptic. The table below maps the
+most common ones to their actual root cause and a one-line fix.
+
+| Error | What it really means | Fix |
+|---|---|---|
+| `Permission denied (publickey).` | Server has no record of your public key for this account, or the key you offered does not match anything in `authorized_keys`. | Confirm `~/.ssh/authorized_keys` on the server contains your public key. Check the `User` in your config matches the remote account. Run `ssh -v` to see which key was offered. |
+| `Permissions 0644 for '/Users/.../id_ed25519' are too open.` | Your private key file is world-readable. SSH refuses to use it. | `chmod 600 ~/.ssh/id_ed25519`. Also check `~/.ssh` is `700`. |
+| `Host key verification failed.` | The server's host key is not in `~/.ssh/known_hosts`, or it does not match what is recorded there. | First-time connections: confirm the fingerprint with the cluster docs and accept it. If you know the cluster was rebuilt, remove the old entry: `ssh-keygen -R hpc.cluster.edu`. |
+| `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` | Same as above, but louder. The server is presenting a different host key from the one you trusted before. | If your sysadmin announced a rebuild, this is expected — remove the stale entry and reconnect. If they did not, **stop and verify out of band** before trusting the new key. This is exactly what host-key checking is for. |
+| `Connection closed by ... port 22` (immediately, with no auth attempt) | Your IP is being blocked at the firewall, or `sshd` is not running, or you are connecting to the wrong host/port. | Try from a different network. Check the cluster's status page. Confirm the hostname and port. |
+| `Connection timed out` | TCP can't reach port 22 at all. Outbound 22 may be blocked by the network you are on (some hotels, conference WiFi, locked-down corporate guest networks). | Try from a phone hotspot to confirm. If 22 is blocked, ask whether the cluster offers an alternate port (often 2022 or 443). |
+| `Could not resolve hostname` | DNS lookup failed for the host you typed. | Typo in `HostName`, no DNS resolution, or VPN required to resolve internal hostnames. |
+| `Too many authentication failures` | The agent is offering many keys; the server's `MaxAuthTries` (often 6) trips before the right key is tried. | Add `IdentitiesOnly yes` and an explicit `IdentityFile` to the affected `Host` block so only one key is offered. |
+| `kex_exchange_identification: Connection closed by remote host` | Server-side `sshd` rejected the connection before key exchange — often because of fail2ban / DenyHosts entries from too many failed logins. | Wait out the cooldown; ask the sysadmin to remove your IP from the deny list; fix whatever was causing failures (usually a bad config). |
+| `ControlSocket /...is already in use` (when starting a new session) | Stale multiplexing socket from a previous SSH process. | `ssh -O exit hpc`, or just `rm ~/.ssh/cm/*` and reconnect. |
+| VS Code: *Failed to connect to the remote extension host server* | Usually one of: the cluster's home quota is full so VS Code can't write to `~/.vscode-server`, the login shell prints something to stdout that confuses the launcher, or a different VS Code server version is conflicting. | Check `quota`. Ensure your `~/.bashrc` does not unconditionally `echo` anything. Delete `~/.vscode-server` and reconnect to force a clean re-install. |
+
+When in doubt, run with verbose mode:
+
+```bash
+ssh -v hpc       # one -v: useful
+ssh -vv hpc      # more
+ssh -vvv hpc     # the full firehose; shows every key tried, every config rule applied
+```
+
+The verbose output names exactly which key files were considered, which were
+offered, and how the server responded. For a stubborn `Permission denied (publickey)`,
+`ssh -v` is almost always the fastest path to the answer.
+
+## Best Practices
+
+A short list of habits that prevent most SSH troubles:
+
+- **One key per device, not one per cluster.** A single Ed25519 key per laptop,
+  installed in every `authorized_keys` you use, is easier to manage and easier to
+  revoke than a tangle of per-cluster keys.
+- **Always set a passphrase.** A passwordless key is a plain-text password on your
+  disk. Use the agent + Keychain integration so you only type the passphrase once
+  per session.
+- **Never commit a private key to a repository.** Add `id_*`, `*.pem`, `*.key`, and
+  `id_ed25519` to a global `~/.gitignore`. If you ever do commit a private key,
+  rotate it everywhere immediately — `git filter-repo` does not undo the
+  fundamental fact that the key is now public.
+- **Never share private keys between users or copy them between devices.** "Sharing
+  a key" is sharing your identity. If a teammate needs access to a server, they
+  generate their own key and you add their public key to `authorized_keys`.
+- **Rotate keys when leaving an institution.** When your university affiliation
+  ends, generate new keys and have your old public key removed from any
+  `authorized_keys` files where it lives. Most institutional accounts are deleted
+  on departure, which handles this implicitly, but cross-institution access does
+  not.
+- **Use `~/.ssh/config` instead of long command lines.** Every option, key path,
+  jump host, and tunnel belongs in config, not in your shell history.
+- **Verify host keys on first connect.** When SSH asks "are you sure you want to
+  continue connecting?", check the fingerprint against your institution's
+  documentation. After that initial check, host-key verification protects you
+  automatically.
+- **Default `ForwardAgent` to `no`.** Enable it only on hosts you trust, and prefer
+  per-project deploy keys for things like Git pulls on the cluster.
+- **Audit `authorized_keys` periodically.** Once a year, list the keys installed on
+  your cluster account: `cat ~/.ssh/authorized_keys`. Remove any whose comment or
+  fingerprint you no longer recognize. Old laptop, old key, no longer needed —
+  delete the line.
+
+::: {.callout-tip}
+## Pro-Tip: Treat `~/.ssh/config` Like Code
+
+Your config grows over time as you join projects, leave institutions, and adopt
+new clusters. Treat it like a real artifact: comment liberally, group related
+hosts, and consider committing a sanitized copy to a personal dotfiles repository
+(with private hostnames and usernames replaced or kept in an untracked
+`config.local` file pulled in via `Include config.local`). When you set up a new
+laptop, restoring a working SSH config is the difference between five hours of
+trial-and-error and five minutes of `git clone`.
+:::
+
+## Exercises
+
+1. Generate an Ed25519 key pair on your laptop with a meaningful comment string. Verify
+   the file permissions are `600` for the private key and `644` for the public key.
+   Inspect the public key file with `cat` — identify the three space-separated fields.
+
+2. Install your public key on an HPC cluster using `ssh-copy-id`. Reconnect and confirm
+   you are no longer prompted for a password. Then look at the remote `~/.ssh/
+   authorized_keys` and confirm your key appears there exactly as it does in your
+   local `id_ed25519.pub`.
+
+3. Add a `Host hpc` block to your `~/.ssh/config` that uses `HostName`, `User`, and
+   `IdentityFile`. Verify that `ssh hpc` connects you without any other arguments.
+   Then add `ControlMaster auto`, `ControlPath`, and `ControlPersist`, and time the
+   difference between the first and second connection with `time ssh hpc echo hi`.
+
+4. Find an internal cluster node (a compute node, a service node, or a database server)
+   that is only reachable via the login node. Configure a `ProxyJump` entry so you can
+   reach it directly with one command. Verify by connecting and running `hostname`
+   on the interior node.
+
+5. Use `rsync` over SSH to upload a directory of fastq files to the cluster, with
+   `--partial` and `--progress`. Interrupt the transfer with Ctrl-C halfway through.
+   Re-run the same `rsync` command and confirm it resumes rather than starting over.
+
+6. Start an interactive Slurm session on a compute node, launch `jupyter lab` on
+   port 8888, and tunnel it through the login node so you can open it in your laptop
+   browser at `http://localhost:8888`. Confirm the kernel is running on a compute
+   node by running `socket.gethostname()` from a Python cell.
+
+7. Add `IdentitiesOnly yes` to one of your `Host` blocks. Then add `-vvv` to your next
+   `ssh` invocation against that host and read the output. Identify the exact line
+   where the server accepts your key.
+
+8. Examine your remote `~/.ssh/authorized_keys` on at least one cluster. For each
+   line, identify whose key it is from the comment field. Remove any keys you no
+   longer recognize or no longer use, then verify you can still log in.
+
+## Further Reading
+
+The most authoritative references are the OpenSSH manual pages, which are unusually
+well-written for system tooling. `man ssh`, `man ssh_config`, `man sshd_config`, and
+`man ssh-keygen` are worth reading at least once in full — together they describe
+every option mentioned in this chapter and many that were not. The OpenSSH project's
+own documentation at [openssh.com/manual.html](https://www.openssh.com/manual.html)
+collects the same content with cross-references.
+
+For configuration patterns, the
+[Mozilla OpenSSH guidelines](https://infosec.mozilla.org/guidelines/openssh) are a
+short, opinionated reference for both `ssh_config` and `sshd_config` that has aged
+well. Most institutional security teams base their SSH policy on something close to
+this document.
+
+For the cryptography background, *Cryptography Engineering* by Ferguson, Schneier,
+and Kohno (Wiley, 2010) remains the most readable introduction to public-key systems
+that does not require a math degree. For Ed25519 specifically, Daniel J. Bernstein's
+[Curve25519 page](https://cr.yp.to/ecdh.html) and the
+[original Ed25519 paper](https://ed25519.cr.yp.to/) are concise and authoritative.
+
+For HPC-specific tooling, your institution's HPC user guide is the single best source
+of cluster-specific information: hostnames, ports, 2FA requirements, jump-host
+topology, and any local quirks (alternate ports, IP allowlisting, VPN requirements).
+For Tufts users, [it.tufts.edu/research-technology](https://it.tufts.edu/research-technology)
+documents the Pax cluster's SSH configuration. Most other US universities publish
+similar guides; bookmark yours.
+
+For VS Code Remote-SSH, the
+[official documentation](https://code.visualstudio.com/docs/remote/ssh) covers the
+basics and the
+[remote-ssh troubleshooting page](https://code.visualstudio.com/docs/remote/troubleshooting)
+covers the home-quota and shell-output pitfalls noted above. The Cursor documentation
+mirrors this content for the Cursor fork.
+
+For a deeper dive into the protocol itself, RFC 4251 ("The Secure Shell (SSH)
+Protocol Architecture") and its companion RFCs (4252–4254) define the wire format and
+authentication methods. They are dry but precise — useful when an error message
+references a specific protocol concept and you want to understand exactly what is
+happening on the wire.

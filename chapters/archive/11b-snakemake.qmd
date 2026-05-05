@@ -1,0 +1,1003 @@
+# Snakemake for Bioinformatics {#sec-snakemake}
+
+## Why Snakemake?
+
+Snakemake brings the power of a workflow manager with the familiarity of Python. If you can write a Python script, you can write a Snakemake pipeline — the syntax is a Python-based DSL (Domain-Specific Language) that reads naturally and integrates directly with the Python ecosystem.
+
+This chapter covers Snakemake from first principles through to production-quality pipelines on HPC clusters.
+
+## Installation
+
+Snakemake is distributed via Conda. Install it into its own environment to avoid dependency conflicts:
+
+```bash
+# Create a dedicated environment
+mamba create -n snakemake -c conda-forge -c bioconda snakemake
+
+# Activate it
+conda activate snakemake
+
+# Verify
+snakemake --version
+# 8.x.x
+```
+
+::: {.callout-warning}
+## Snakemake 8 Breaking Changes
+
+Snakemake 8 introduced significant changes from version 7, including a new plugin architecture for executors, storage, and software deployment. If you are following older tutorials (pre-2024), be aware that some command-line flags have changed. For example, `--use-conda` became `--software-deployment-method conda` (or `--sdm conda`), and cluster execution now uses executor plugins instead of `--cluster` flags.
+
+This chapter uses Snakemake 8+ syntax throughout.
+:::
+
+## Anatomy of a Snakefile
+
+A `Snakefile` is a plain-text file containing **rules**. Each rule describes one step of your pipeline:
+
+```python
+rule sort_bam:
+    input:
+        "aligned/{sample}.bam"
+    output:
+        "sorted/{sample}.sorted.bam"
+    threads: 4
+    shell:
+        "samtools sort -@ {threads} {input} -o {output}"
+```
+
+### How Snakemake Thinks
+
+Snakemake works **backward** from a target. When you run `snakemake sorted/SRR001.sorted.bam`, Snakemake:
+
+1. Sees you want `sorted/SRR001.sorted.bam`
+2. Finds `rule sort_bam` produces files matching that pattern
+3. Infers that `{sample}` = `SRR001`, so the input is `aligned/SRR001.bam`
+4. Checks if `aligned/SRR001.bam` exists. If not, finds a rule that produces it.
+5. Continues until all dependencies are resolved or found as existing files.
+
+This backward chaining is the defining feature of Snakemake — you describe *what* you want, and Snakemake figures out *how* to build it.
+
+## Rules in Depth {#sec-rules}
+
+### The Target Rule
+
+By convention, the first rule in a Snakefile is named `all` and lists all final outputs. This is the default target when you run `snakemake` without specifying a file:
+
+```python
+SAMPLES = ["SRR001", "SRR002", "SRR003"]
+
+rule all:
+    input:
+        expand("results/sorted/{sample}.sorted.bam", sample=SAMPLES),
+        expand("results/qc/{sample}_fastqc.html", sample=SAMPLES),
+        "results/multiqc/multiqc_report.html"
+```
+
+### Wildcards
+
+Wildcards are the mechanism for generalization — they allow one rule to apply to many samples:
+
+```python
+rule fastqc:
+    input:
+        "data/{sample}.fastq.gz"
+    output:
+        html = "results/qc/{sample}_fastqc.html",
+        zip  = "results/qc/{sample}_fastqc.zip"
+    shell:
+        "fastqc {input} -o results/qc/"
+```
+
+When Snakemake needs `results/qc/SRR001_fastqc.html`, it matches `{sample}` to `SRR001` and looks for `data/SRR001.fastq.gz`.
+
+::: {.callout-warning}
+## Wildcard Consistency
+
+All wildcards in a rule's `input` must also appear in the `output` (or be constrained). If a wildcard appears in the input but not the output, Snakemake cannot determine its value by working backward from the target:
+
+```python
+# Bad — {genome} does not appear in output
+rule align:
+    input:
+        reads  = "data/{sample}.fastq.gz",
+        # how does Snakemake know which genome?
+        genome = "ref/{genome}.fa"
+    output:
+        "aligned/{sample}.bam"
+
+# Good — provide the genome via a config or a fixed value
+rule align:
+    input:
+        reads  = "data/{sample}.fastq.gz",
+        genome = config["genome"]
+    output:
+        "aligned/{sample}.bam"
+```
+:::
+
+### The `expand()` Function
+
+`expand()` generates lists of filenames by substituting wildcards with values from a list:
+
+```python
+SAMPLES = ["SRR001", "SRR002", "SRR003"]
+TOOLS   = ["fastqc", "multiqc"]
+
+# Single wildcard
+expand("results/{sample}.bam", sample=SAMPLES)
+# → ["results/SRR001.bam", "results/SRR002.bam", "results/SRR003.bam"]
+
+# Multiple wildcards — Cartesian product by default
+expand("results/{sample}_{tool}.html", sample=SAMPLES, tool=TOOLS)
+# → 3 × 2 = 6 files
+
+# Zip instead of product (pairwise)
+expand("results/{sample}_{tool}.html", zip, sample=["A","B"], tool=["X","Y"])
+# → ["results/A_X.html", "results/B_Y.html"]
+```
+
+`expand()` is used almost exclusively in the `rule all` input — it tells Snakemake everything you want produced.
+
+### Named Inputs and Outputs
+
+Name your inputs and outputs for clarity, especially when a rule has multiple files:
+
+```python
+rule align:
+    input:
+        reads = "trimmed/{sample}_trimmed.fastq.gz",
+        index = "ref/genome.fa"
+    output:
+        bam = "aligned/{sample}.bam",
+        log = "aligned/{sample}.align.log"
+    threads: 8
+    shell:
+        """
+        bwa mem -t {threads} {input.index} {input.reads} \
+            2> {output.log} | \
+            samtools sort -@ {threads} -o {output.bam}
+        """
+```
+
+### The `params` Directive
+
+Use `params` for values that are not files — thresholds, flags, tool-specific settings:
+
+```python
+rule filter_variants:
+    input:
+        "variants/{sample}.vcf.gz"
+    output:
+        "filtered/{sample}.filtered.vcf.gz"
+    params:
+        min_qual = 30,
+        min_dp   = 10
+    shell:
+        """
+        bcftools filter \
+            -e 'QUAL < {params.min_qual} || DP < {params.min_dp}' \
+            {input} -Oz -o {output}
+        """
+```
+
+### The `log` Directive
+
+Capture tool output for debugging. Log files are not deleted when a rule fails (unlike output files), making them essential for troubleshooting:
+
+```python
+rule star_align:
+    input:
+        reads = "trimmed/{sample}_trimmed.fastq.gz",
+        index = "ref/star_index"
+    output:
+        bam = "aligned/{sample}.Aligned.sortedByCoord.out.bam"
+    log:
+        "logs/star/{sample}.log"
+    threads: 12
+    shell:
+        """
+        STAR --runThreadN {threads} \
+             --genomeDir {input.index} \
+             --readFilesIn {input.reads} \
+             --outSAMtype BAM SortedByCoordinate \
+             --outFileNamePrefix aligned/{wildcards.sample}. \
+             > {log} 2>&1
+        """
+```
+
+### The `benchmark` Directive
+
+Track runtime and memory usage automatically:
+
+```python
+rule align:
+    input:  "trimmed/{sample}.fastq.gz"
+    output: "aligned/{sample}.bam"
+    benchmark:
+        "benchmarks/{sample}.align.tsv"
+    threads: 8
+    shell:
+        """
+        bwa mem -t {threads} ref/genome.fa {input} \
+            | samtools sort -o {output}
+        """
+```
+
+Snakemake writes a TSV file with columns including wall time (seconds), max RSS (memory), CPU time, and I/O metrics — invaluable for optimizing resource requests on HPC.
+
+### The `threads` and `resources` Directives
+
+```python
+rule star_align:
+    input:  ...
+    output: ...
+    threads: 12
+    resources:
+        mem_mb   = 48000,     # memory in MB
+        time_min = 480,       # wall time in minutes
+        disk_mb  = 50000      # scratch disk
+    shell:
+        """
+        STAR --runThreadN {threads} ...
+        """
+```
+
+Resources are passed to the executor (Slurm plugin) to request appropriate allocations. You can also define dynamic resources as functions:
+
+```python
+rule align:
+    ...
+    resources:
+        mem_mb = lambda wildcards, attempt: 32000 * attempt
+    ...
+```
+
+On the first attempt, 32 GB is requested. If the job fails (e.g., out of memory), Snakemake retries with 64 GB.
+
+## Configuration Files {#sec-config}
+
+Hardcoding sample lists and reference paths in the Snakefile makes it inflexible. Use a YAML configuration file instead:
+
+```yaml
+# config/config.yaml
+samples:
+  - SRR001
+  - SRR002
+  - SRR003
+
+genome: "ref/GRCh38.fa"
+annotation: "ref/gencode.v44.annotation.gtf"
+
+trimming:
+  adapter: "AGATCGGAAGAGC"
+  min_length: 36
+
+alignment:
+  tool: "star"
+  threads: 12
+```
+
+Access configuration values in the Snakefile with `config["key"]`:
+
+```python
+configfile: "config/config.yaml"
+
+SAMPLES = config["samples"]
+
+rule all:
+    input:
+        expand("results/aligned/{sample}.bam", sample=SAMPLES)
+
+rule trim:
+    input:
+        "data/{sample}.fastq.gz"
+    output:
+        "trimmed/{sample}_trimmed.fastq.gz"
+    params:
+        adapter    = config["trimming"]["adapter"],
+        min_length = config["trimming"]["min_length"]
+    shell:
+        """
+        trim_galore --adapter {params.adapter} \
+                    --length {params.min_length} \
+                    {input} -o trimmed/
+        """
+```
+
+::: {.callout-tip}
+## Pro-Tip: Use a Sample Sheet for Complex Experiments
+
+For paired-end reads, multiple lanes, or complex metadata, load a CSV sample sheet with pandas:
+
+```python
+import pandas as pd
+
+configfile: "config/config.yaml"
+samples = (pd.read_csv(config["sample_sheet"])
+           .set_index("sample_id", drop=False))
+
+def get_fastqs(wildcards):
+    row = samples.loc[wildcards.sample]
+    return {"r1": row["fastq_1"], "r2": row["fastq_2"]}
+
+rule align:
+    input:
+        unpack(get_fastqs)
+    output:
+        "aligned/{sample}.bam"
+    shell:
+        """
+        bwa mem ref/genome.fa {input.r1} {input.r2} \
+            | samtools sort -o {output}
+        """
+```
+
+The `unpack()` function converts a dictionary into named inputs.
+:::
+
+## Conda Integration {#sec-conda-integration}
+
+Snakemake can automatically create and activate Conda environments for each rule, ensuring every tool uses the exact right version — even when different rules need conflicting dependencies.
+
+### Per-Rule Conda Environments
+
+Create an environment YAML file for each tool or group of tools:
+
+```yaml
+# envs/samtools.yaml
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - samtools=1.20
+  - bcftools=1.20
+```
+
+Reference it in your rule:
+
+```python
+rule sort:
+    input:  "aligned/{sample}.bam"
+    output: "sorted/{sample}.sorted.bam"
+    conda:
+        "envs/samtools.yaml"
+    shell:
+        "samtools sort {input} -o {output}"
+```
+
+Run with Conda software deployment:
+
+```bash
+snakemake --cores 8 --sdm conda
+# Snakemake 7 equivalent: snakemake --cores 8 --use-conda
+```
+
+On the first run, Snakemake creates the Conda environment (cached in `.snakemake/conda/`). Subsequent runs reuse it instantly.
+
+### Combining Conda and Containers
+
+For maximum reproducibility, use both — Conda for the environment definition and a container for the operating system:
+
+```python
+rule align:
+    input:  ...
+    output: ...
+    conda:
+        "envs/bwa.yaml"
+    container:
+        "docker://condaforge/miniforge3:latest"
+    shell:
+        "bwa mem ..."
+```
+
+Run with:
+
+```bash
+snakemake --cores 8 --sdm conda apptainer
+```
+
+## Snakemake Wrappers {#sec-wrappers}
+
+The [Snakemake Wrapper Repository](https://snakemake-wrappers.readthedocs.io/) provides pre-written, tested wrappers for hundreds of bioinformatics tools. Instead of writing the `shell:` command yourself, you reference a wrapper that handles tool invocation, Conda environment creation, and parameter passing:
+
+```python
+rule fastqc:
+    input:
+        "data/{sample}.fastq.gz"
+    output:
+        html = "results/qc/{sample}_fastqc.html",
+        zip  = "results/qc/{sample}_fastqc.zip"
+    log:
+        "logs/fastqc/{sample}.log"
+    threads: 2
+    wrapper:
+        "v5.0.2/bio/fastqc"
+
+rule trim_galore:
+    input:
+        ["data/{sample}_R1.fastq.gz", "data/{sample}_R2.fastq.gz"]
+    output:
+        fasta_fwd   = "trimmed/{sample}_R1_val_1.fq.gz",
+        fasta_rev   = "trimmed/{sample}_R2_val_2.fq.gz",
+        report_fwd  = "trimmed/{sample}_R1.fastq.gz_trimming_report.txt",
+        report_rev  = "trimmed/{sample}_R2.fastq.gz_trimming_report.txt"
+    log:
+        "logs/trim_galore/{sample}.log"
+    wrapper:
+        "v5.0.2/bio/trim_galore/pe"
+
+rule star_align:
+    input:
+        fq1    = "trimmed/{sample}_R1_val_1.fq.gz",
+        idx    = "ref/star_index"
+    output:
+        aln    = "aligned/{sample}/Aligned.sortedByCoord.out.bam",
+        log    = "aligned/{sample}/Log.final.out"
+    log:
+        "logs/star/{sample}.log"
+    threads: 12
+    wrapper:
+        "v5.0.2/bio/star/align"
+```
+
+::: {.callout-tip}
+## Pro-Tip: Pin Wrapper Versions
+
+Always specify a version tag (e.g., `v5.0.2/bio/fastqc`) rather than `master/bio/fastqc`. The wrapper code and its Conda environment definition are versioned together — an unversioned reference can silently change behavior.
+:::
+
+The wrapper repository covers most common bioinformatics tools: FastQC, Trim Galore, STAR, BWA, samtools, bcftools, GATK, featureCounts, Salmon, kallisto, MultiQC, and many more. Browse the full list at [snakemake-wrappers.readthedocs.io](https://snakemake-wrappers.readthedocs.io/).
+
+## Dry Runs and Visualization {#sec-dry-run}
+
+Before running a pipeline — especially before submitting hundreds of cluster jobs — always preview what Snakemake will do:
+
+```bash
+# Dry run: show which rules would execute, without running anything
+snakemake --cores 1 -n
+
+# Dry run with reasons: show WHY each rule will run
+snakemake --cores 1 -n -r
+
+# Generate a DAG visualization
+snakemake --dag | dot -Tpng > dag.png
+
+# Generate a rulegraph (simplified DAG showing
+# rule types, not individual jobs)
+snakemake --rulegraph | dot -Tpng > rulegraph.png
+```
+
+::: {.callout-note}
+## The `-n` Flag Is Your Safety Net
+
+Make it a habit: always run with `-n` (dry run) first. It catches missing input files, wildcard mismatches, and circular dependencies — without wasting any compute time.
+:::
+
+## Running on HPC with Slurm {#sec-slurm}
+
+### The Slurm Executor Plugin
+
+Snakemake 8 uses an executor plugin architecture. Install the Slurm plugin:
+
+```bash
+pip install snakemake-executor-plugin-slurm
+```
+
+### Execution
+
+```bash
+# Run with the Slurm executor
+snakemake --executor slurm --jobs 50 --sdm conda
+
+# With a default Slurm partition
+snakemake --executor slurm \
+    --jobs 50 \
+    --default-resources slurm_partition=general \
+    --sdm conda
+```
+
+Snakemake submits each rule instance as a separate Slurm job, passing `threads`, `resources.mem_mb`, and `resources.time_min` to the `sbatch` command. It monitors job status and handles failures according to your retry settings.
+
+### Per-Rule Resource Allocation
+
+```python
+rule star_align:
+    input:  ...
+    output: ...
+    threads: 12
+    resources:
+        mem_mb        = 48000,
+        time_min      = 480,
+        slurm_partition = "largemem"
+    conda:
+        "envs/star.yaml"
+    shell:
+        """
+        STAR --runThreadN {threads} ...
+        """
+```
+
+### Snakemake Profiles
+
+For HPC, create a **profile** — a directory containing a `config.yaml` with default settings for your cluster:
+
+```yaml
+# profiles/slurm/config.yaml
+executor: slurm
+jobs: 100
+default-resources:
+  slurm_partition: "general"
+  mem_mb: 8000
+  time_min: 240
+software-deployment-method:
+  - conda
+latency-wait: 60
+retries: 2
+```
+
+Run with the profile:
+
+```bash
+snakemake --profile profiles/slurm/
+```
+
+This keeps your Slurm configuration out of the Snakefile and makes it reusable across projects.
+
+::: {.callout-tip}
+## Pro-Tip: Global Profiles
+
+Place a profile at `~/.config/snakemake/slurm/config.yaml` (or `/etc/xdg/snakemake/` for system-wide) so that every pipeline you run on this cluster picks up sensible defaults automatically.
+:::
+
+## Modularization {#sec-modular}
+
+As pipelines grow, a single Snakefile becomes unwieldy. Snakemake supports two modularization mechanisms:
+
+### Include: Splitting Rules Across Files
+
+```python
+# Snakefile
+configfile: "config/config.yaml"
+
+include: "rules/qc.smk"
+include: "rules/alignment.smk"
+include: "rules/quantification.smk"
+
+rule all:
+    input:
+        expand("results/counts/{sample}.counts.tsv",
+               sample=config["samples"])
+```
+
+```python
+# rules/qc.smk
+rule fastqc:
+    input:  "data/{sample}.fastq.gz"
+    output: "results/qc/{sample}_fastqc.html"
+    wrapper: "v5.0.2/bio/fastqc"
+
+rule multiqc:
+    input:
+        expand("results/qc/{sample}_fastqc.html", sample=config["samples"])
+    output:
+        "results/multiqc/multiqc_report.html"
+    wrapper: "v5.0.2/bio/multiqc"
+```
+
+### Modules: Reusing Entire Workflows
+
+Snakemake 8 introduced `module` for importing rules from external Snakefiles and optionally modifying them:
+
+```python
+module alignment_workflow:
+    snakefile:
+        "https://github.com/mylab/alignment-workflow/raw/v1.0/Snakefile"
+    config:
+        config
+
+use rule * from alignment_workflow as alignment_*
+```
+
+## Handling Paired-End Reads {#sec-paired-end}
+
+Paired-end data is ubiquitous in bioinformatics. Here is a clean pattern for handling it:
+
+```python
+import pandas as pd
+
+configfile: "config/config.yaml"
+samples = pd.read_csv(config["sample_sheet"]).set_index("sample_id")
+
+rule all:
+    input:
+        expand("results/aligned/{sample}.sorted.bam", sample=samples.index)
+
+rule trim_pe:
+    input:
+        r1 = lambda wc: samples.loc[wc.sample, "fastq_1"],
+        r2 = lambda wc: samples.loc[wc.sample, "fastq_2"]
+    output:
+        r1 = "results/trimmed/{sample}_R1_val_1.fq.gz",
+        r2 = "results/trimmed/{sample}_R2_val_2.fq.gz"
+    log:
+        "logs/trim/{sample}.log"
+    threads: 4
+    conda:
+        "envs/trim_galore.yaml"
+    shell:
+        """
+        trim_galore --paired --cores {threads} \
+            {input.r1} {input.r2} \
+            -o results/trimmed/ \
+            > {log} 2>&1
+        """
+
+rule align_pe:
+    input:
+        r1    = "results/trimmed/{sample}_R1_val_1.fq.gz",
+        r2    = "results/trimmed/{sample}_R2_val_2.fq.gz",
+        index = config["genome"]
+    output:
+        bam = "results/aligned/{sample}.sorted.bam"
+    log:
+        "logs/align/{sample}.log"
+    threads: 8
+    resources:
+        mem_mb = 32000
+    conda:
+        "envs/bwa.yaml"
+    shell:
+        """
+        bwa mem -t {threads} {input.index} {input.r1} {input.r2} 2> {log} | \
+            samtools sort -@ {threads} -o {output.bam}
+        samtools index {output.bam}
+        """
+```
+
+## Complete Example: RNA-Seq Pipeline {#sec-rnaseq-pipeline}
+
+Here is a production-quality RNA-seq pipeline that goes from raw reads to a count matrix:
+
+### Project Structure
+
+```
+rnaseq_pipeline/
+├── Snakefile
+├── config/
+│   ├── config.yaml
+│   └── samples.csv
+├── envs/
+│   ├── fastqc.yaml
+│   ├── trim_galore.yaml
+│   ├── star.yaml
+│   ├── subread.yaml
+│   └── multiqc.yaml
+└── rules/
+    ├── qc.smk
+    ├── trimming.smk
+    ├── alignment.smk
+    └── quantification.smk
+```
+
+### Config
+
+```yaml
+# config/config.yaml
+sample_sheet: "config/samples.csv"
+genome_index: "ref/star_index"
+gtf: "ref/gencode.v44.annotation.gtf"
+```
+
+```
+# config/samples.csv
+sample_id,fastq_1,fastq_2,condition
+WT_rep1,data/WT_rep1_R1.fastq.gz,data/WT_rep1_R2.fastq.gz,wildtype
+WT_rep2,data/WT_rep2_R1.fastq.gz,data/WT_rep2_R2.fastq.gz,wildtype
+KO_rep1,data/KO_rep1_R1.fastq.gz,data/KO_rep1_R2.fastq.gz,knockout
+KO_rep2,data/KO_rep2_R1.fastq.gz,data/KO_rep2_R2.fastq.gz,knockout
+```
+
+### Main Snakefile
+
+```python
+import pandas as pd
+
+configfile: "config/config.yaml"
+
+samples = (pd.read_csv(config["sample_sheet"])
+           .set_index("sample_id", drop=False))
+SAMPLE_IDS = samples.index.tolist()
+
+include: "rules/qc.smk"
+include: "rules/trimming.smk"
+include: "rules/alignment.smk"
+include: "rules/quantification.smk"
+
+rule all:
+    input:
+        # QC reports
+        expand("results/qc/raw/{sample}_R1_fastqc.html", sample=SAMPLE_IDS),
+        # Aligned BAMs
+        expand("results/aligned/{sample}.Aligned.sortedByCoord.out.bam",
+               sample=SAMPLE_IDS),
+        # Gene count matrix
+        "results/counts/all_samples.counts.tsv",
+        # MultiQC report
+        "results/multiqc/multiqc_report.html"
+```
+
+### QC Rules
+
+```python
+# rules/qc.smk
+rule fastqc_raw:
+    input:
+        lambda wc: samples.loc[wc.sample, f"fastq_{wc.read}"]
+    output:
+        html = "results/qc/raw/{sample}_R{read}_fastqc.html",
+        zip  = "results/qc/raw/{sample}_R{read}_fastqc.zip"
+    log:
+        "logs/fastqc/{sample}_R{read}.log"
+    threads: 2
+    conda:
+        "../envs/fastqc.yaml"
+    shell:
+        "fastqc --threads {threads} {input} -o results/qc/raw/ > {log} 2>&1"
+
+rule multiqc:
+    input:
+        expand("results/qc/raw/{sample}_R{read}_fastqc.zip",
+               sample=SAMPLE_IDS, read=["1", "2"]),
+        expand("results/aligned/{sample}.Log.final.out", sample=SAMPLE_IDS)
+    output:
+        "results/multiqc/multiqc_report.html"
+    log:
+        "logs/multiqc.log"
+    conda:
+        "../envs/multiqc.yaml"
+    shell:
+        """
+        multiqc results/qc/ results/aligned/ \
+            -o results/multiqc/ \
+            --force > {log} 2>&1
+        """
+```
+
+### Trimming Rules
+
+```python
+# rules/trimming.smk
+rule trim_galore:
+    input:
+        r1 = lambda wc: samples.loc[wc.sample, "fastq_1"],
+        r2 = lambda wc: samples.loc[wc.sample, "fastq_2"]
+    output:
+        r1 = "results/trimmed/{sample}_R1_val_1.fq.gz",
+        r2 = "results/trimmed/{sample}_R2_val_2.fq.gz",
+        report_r1 = ("results/trimmed/"
+            "{sample}_R1.fastq.gz_trimming_report.txt"),
+        report_r2 = ("results/trimmed/"
+            "{sample}_R2.fastq.gz_trimming_report.txt")
+    log:
+        "logs/trim_galore/{sample}.log"
+    threads: 4
+    conda:
+        "../envs/trim_galore.yaml"
+    shell:
+        """
+        trim_galore --paired --cores {threads} \
+            {input.r1} {input.r2} \
+            -o results/trimmed/ > {log} 2>&1
+        """
+```
+
+### Alignment Rules
+
+```python
+# rules/alignment.smk
+rule star_align:
+    input:
+        r1  = "results/trimmed/{sample}_R1_val_1.fq.gz",
+        r2  = "results/trimmed/{sample}_R2_val_2.fq.gz",
+        idx = config["genome_index"]
+    output:
+        bam     = "results/aligned/{sample}.Aligned.sortedByCoord.out.bam",
+        log_out = "results/aligned/{sample}.Log.final.out"
+    log:
+        "logs/star/{sample}.log"
+    benchmark:
+        "benchmarks/star/{sample}.tsv"
+    threads: 12
+    resources:
+        mem_mb = 48000
+    conda:
+        "../envs/star.yaml"
+    shell:
+        """
+        STAR --runThreadN {threads} \
+             --genomeDir {input.idx} \
+             --readFilesIn {input.r1} {input.r2} \
+             --readFilesCommand zcat \
+             --outSAMtype BAM SortedByCoordinate \
+             --outFileNamePrefix results/aligned/{wildcards.sample}. \
+             > {log} 2>&1
+
+        samtools index {output.bam}
+        """
+```
+
+### Quantification Rules
+
+```python
+# rules/quantification.smk
+rule featurecounts:
+    input:
+        bam = "results/aligned/{sample}.Aligned.sortedByCoord.out.bam",
+        gtf = config["gtf"]
+    output:
+        counts  = "results/counts/{sample}.counts.tsv",
+        summary = "results/counts/{sample}.counts.tsv.summary"
+    log:
+        "logs/featurecounts/{sample}.log"
+    threads: 4
+    conda:
+        "../envs/subread.yaml"
+    shell:
+        """
+        featureCounts -T {threads} -p --countReadPairs \
+            -a {input.gtf} \
+            -o {output.counts} \
+            {input.bam} > {log} 2>&1
+        """
+
+rule merge_counts:
+    input:
+        expand("results/counts/{sample}.counts.tsv", sample=SAMPLE_IDS)
+    output:
+        "results/counts/all_samples.counts.tsv"
+    run:
+        import pandas as pd
+        frames = []
+        for f in input:
+            df = pd.read_csv(f, sep="\t", comment="#")
+            sample_name = df.columns[-1]  # last column is the count
+            frames.append(df[["Geneid", sample_name]].set_index("Geneid"))
+        merged = pd.concat(frames, axis=1)
+        merged.to_csv(str(output), sep="\t")
+```
+
+### Running the Pipeline
+
+```bash
+# Preview what will run
+snakemake -n -r
+
+# Run locally with 8 cores
+snakemake --cores 8 --sdm conda
+
+# Run on Slurm
+snakemake --executor slurm --jobs 50 --sdm conda \
+    --default-resources slurm_partition=general
+
+# Resume after a failure (Snakemake does this by default — it only runs
+# rules whose output files are missing or out of date)
+snakemake --cores 8 --sdm conda
+```
+
+## Python Integration {#sec-python-integration}
+
+One of Snakemake's superpowers is direct Python integration. You can use `run:` instead of `shell:` to write pure Python code in a rule:
+
+```python
+rule summarize_results:
+    input:
+        counts = "results/counts/all_samples.counts.tsv",
+        metadata = config["sample_sheet"]
+    output:
+        report = "results/summary/expression_summary.tsv",
+        plot   = "results/summary/pca_plot.png"
+    run:
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+
+        counts = pd.read_csv(input.counts, sep="\t", index_col=0)
+        meta = pd.read_csv(input.metadata)
+
+        # PCA
+        X = StandardScaler().fit_transform(counts.T)
+        pca = PCA(n_components=2)
+        pcs = pca.fit_transform(X)
+
+        # Plot
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for condition in meta["condition"].unique():
+            mask = meta["condition"] == condition
+            ax.scatter(pcs[mask, 0], pcs[mask, 1], label=condition, s=80)
+        ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.1%})")
+        ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.1%})")
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(output.plot, dpi=150)
+
+        # Summary table
+        summary = counts.describe().T
+        summary.to_csv(output.report, sep="\t")
+```
+
+You can also use `script:` to call external Python or R scripts:
+
+```python
+rule deseq2:
+    input:
+        counts   = "results/counts/all_samples.counts.tsv",
+        metadata = config["sample_sheet"]
+    output:
+        results = "results/deseq2/differential_expression.tsv"
+    conda:
+        "envs/deseq2.yaml"
+    script:
+        "scripts/run_deseq2.R"
+```
+
+Inside `scripts/run_deseq2.R`, access Snakemake variables with `snakemake@input`, `snakemake@output`, etc.
+
+## Best Practices {#sec-best-practices}
+
+1. **Always use a config file.** Never hardcode sample lists, paths, or parameters in the Snakefile.
+
+2. **Use `log:` on every rule.** When a job fails on the cluster, the log file is your only window into what happened.
+
+3. **Use `benchmark:` on expensive rules.** The benchmark data helps you set accurate `resources:` values for Slurm, reducing both queue wait time and wasted allocation.
+
+4. **Dry-run before real runs.** `snakemake -n -r` catches most problems in seconds.
+
+5. **Pin all software versions** in your Conda environment YAMLs. `samtools=1.20` is reproducible; `samtools` is not.
+
+6. **Use wrappers for common tools.** They are tested, versioned, and handle edge cases you might miss.
+
+7. **Modularize with `include:`.** Keep rules organized by pipeline phase (qc.smk, alignment.smk, etc.).
+
+8. **Keep data out of the workflow directory.** Use config paths to reference data on `/scratch` or `/project`. Only the Snakefile, config, and environment definitions should be version-controlled.
+
+9. **Version-control your pipeline.** The entire pipeline directory (Snakefile, config/, envs/, rules/, scripts/) should be a git repository.
+
+## Exercises
+
+1. **First pipeline.** Write a Snakefile with three rules: (a) run `wc -l` on each `.fastq.gz` file in a `data/` directory, (b) collect the counts into a single summary file, (c) a `rule all` that requests the summary. Run it with `-n` to verify, then execute it.
+
+2. **Wildcards and expand.** Given 4 samples and 2 reference genomes, write a `rule all` that requests alignment files for every sample-genome combination. Use `expand()` with a Cartesian product. Then modify it to align each sample to only one genome (use `zip`).
+
+3. **Config file.** Refactor the pipeline from exercise 1 to read the sample list and any parameters from a `config/config.yaml` file.
+
+4. **Conda environments.** Add a `conda:` directive to your alignment rule. Create an `envs/bwa.yaml` that pins BWA and samtools versions. Run with `--sdm conda` and verify the environment is created.
+
+5. **Wrappers.** Rewrite the FastQC and Trim Galore rules from your pipeline using official Snakemake wrappers. Compare the wrapper version to your hand-written `shell:` version.
+
+6. **Benchmarking.** Add `benchmark:` directives to your alignment and sorting rules. Run the pipeline, then inspect the benchmark TSV files. How much memory did alignment actually use? How does it compare to your `resources.mem_mb` request?
+
+7. **Slurm execution.** Create a Snakemake profile for your cluster (or a simulated one). Define default resources and partition settings. Run your pipeline with `--profile profiles/slurm/`.
+
+8. **End-to-end pipeline.** Build a complete short-read pipeline of your choice
+   (e.g., FastQC → Trim Galore → BWA or STAR alignment → featureCounts → MultiQC).
+   Wire each rule with a Conda environment via the `conda:` directive, run with
+   `--sdm conda`, and verify the environment is created. Test with a small
+   dataset (subset 10,000 reads from real FASTQ files using `seqtk sample`).
+
+## Summary
+
+| Concept | Key Takeaway |
+|---------|-------------|
+| Rules | One tool per rule; declare inputs, outputs, and the command |
+| Wildcards | `{sample}` generalizes rules across all samples |
+| `expand()` | Generates target file lists from sample lists |
+| Config files | Separate parameters from workflow logic |
+| `conda:` | Per-rule isolated environments — pin all versions |
+| Wrappers | Pre-built, tested wrappers for hundreds of tools |
+| `log:` / `benchmark:` | Essential for debugging and resource optimization |
+| `-n` (dry run) | Always preview before executing |
+| Slurm executor | `--executor slurm` submits each rule as a cluster job |
+| Profiles | Reusable cluster configurations in `config.yaml` |
+| `include:` | Split rules into files for maintainability |
+| `run:` / `script:` | Embed Python or call R scripts directly |
