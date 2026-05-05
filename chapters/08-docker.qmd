@@ -394,12 +394,7 @@ Follow these practices to build smaller, faster, more reproducible images:
 
 ### Finding Images
 
-BioContainers images are hosted on two main registries:
-
-| Registry | URL Pattern | Example |
-|----------|------------|---------|
-| **Quay.io** | `quay.io/biocontainers/<tool>:<tag>` | `quay.io/biocontainers/samtools:1.20--h50ea8bc_1` |
-| **Docker Hub** | `biocontainers/<tool>:<tag>` | `biocontainers/samtools:v1.9-4-deb_cv1` |
+BioContainers images are hosted on two main registries. Most live on **Quay.io**, following the pattern `quay.io/biocontainers/<tool>:<tag>` — for example, `quay.io/biocontainers/samtools:1.20--h50ea8bc_1`. Older images are also available on **Docker Hub** under `biocontainers/<tool>:<tag>`, such as `biocontainers/samtools:v1.9-4-deb_cv1`.
 
 You can browse available images at [biocontainers.pro](https://biocontainers.pro/) or search from the command line:
 

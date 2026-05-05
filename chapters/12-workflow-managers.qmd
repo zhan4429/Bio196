@@ -100,9 +100,9 @@ process SORT {
 | Aspect | Snakemake | Nextflow |
 |--------|-----------|----------|
 | **Paradigm** | File-based (pull model) | Dataflow (push model) |
-| **Execution logic** | Backward: "What do I need to produce this file?" | Forward: "Data arrived — run the next step" |
+| **Execution logic** | Pull: file-based dependency resolution | Push: channel-driven dataflow |
 | **Language** | Python-based DSL | Groovy-based DSL (JVM) |
-| **Learning curve for Python users** | Low — reads like Python | Moderate — Groovy/Java syntax is unfamiliar |
+| **Learning curve** | Low (reads like Python) | Moderate (Groovy/Java syntax) |
 
 ### Syntax and Language
 
@@ -138,7 +138,7 @@ Both managers support resuming after failure, but the mechanisms differ:
 
 | Feature | Snakemake | Nextflow |
 |---------|-----------|----------|
-| Cache unit | **Files** — checks if output files exist and are newer than inputs | **Task hashes** — checks if inputs, script, and container are unchanged |
+| Cache unit | Output files (newer-than-input check) | Task hashes (inputs + script + container) |
 | Resume command | Automatic (only re-runs rules with missing/outdated outputs) | `-resume` flag required |
 | Cache location | Output files in the project directory | `work/` directory (separate from final outputs) |
 | Space overhead | Low (outputs are the cache) | Higher (`work/` duplicates data until cleaned) |
@@ -166,7 +166,7 @@ Both managers support resuming after failure, but the mechanisms differ:
 
 | Feature | Snakemake | Nextflow |
 |---------|-----------|----------|
-| Pre-built pipelines | [Snakemake Workflow Catalog](https://snakemake.github.io/snakemake-workflow-catalog/) | [nf-core](https://nf-co.re/) (~100 production pipelines) |
+| Pre-built pipelines | Snakemake Workflow Catalog | nf-core (~100 pipelines) |
 | Reusable components | [Snakemake Wrappers](https://snakemake-wrappers.readthedocs.io/) | nf-core modules |
 | Monitoring platform | Snakemake reports (HTML) | Seqera Platform (web dashboard) |
 | Community size | Large (academic) | Large (academic + industry) |
@@ -178,7 +178,7 @@ Both managers support resuming after failure, but the mechanisms differ:
 |---------|-----------|----------|
 | Config format | YAML config files + CLI flags | `nextflow.config` (Groovy) + YAML params files |
 | Profiles | Via `--profile` directory | Via `-profile` flag in config |
-| Separation of logic and execution | Config file for parameters; executor plugins for HPC | `nextflow.config` profiles for each environment |
+| Logic vs. execution | Config file + executor plugins | `nextflow.config` profiles |
 
 ## When to Choose Which {#sec-when-to-choose}
 

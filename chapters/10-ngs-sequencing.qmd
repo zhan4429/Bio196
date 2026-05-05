@@ -233,18 +233,18 @@ The rise point tells you insert size. Rise at position 60 in a 150 bp run? Inser
 
 FastQC pass/warn/fail flags are not verdicts — they are starting points for interpretation. The table below summarizes which modules to worry about and which are expected artifacts depending on assay type.
 
-| FastQC Module | WGS | RNA-seq | ChIP-seq / ATAC-seq | Common False Flags |
-|---|---|---|---|---|
-| Per-Base Sequence Quality | ⚠ matters | ⚠ matters | ⚠ matters | Slight 3' dip is normal for all |
-| Per-Tile Sequence Quality | ⚠ matters | ⚠ matters | ⚠ matters | Rare; investigate if severe |
-| Per-Sequence Quality Scores | ⚠ matters | ⚠ matters | ⚠ matters | Bimodal = problem; single peak = fine |
-| Per-Base Sequence Content | ⚠ matters | ✓ expected fail | ✓ expected fail | First 10–15 bases wobble due to hexamer priming — **normal** |
-| Per-Sequence GC Content | ⚠ matters | ⚠ matters | ✓ some bias expected | RNA-seq mild deviations are normal |
-| Per-Base N Content | ⚠ matters | ⚠ matters | ⚠ matters | High N → run likely failed |
-| Sequence Duplication | ⚠ matters | ✓ expected fail | ✓ expected fail | **RNA-seq**: high duplication is normal |
-| Overrepresented Sequences | ⚠ matters | ⚠ matters | ⚠ matters | **RNA-seq**: abundant transcripts trigger this |
-| Adapter Content | ⚠ trim | ⚠ trim | ⚠ trim | Always trim before alignment |
-| Sequence Length Distribution | Fine | Fine | Fine | After trimming, variable length is expected |
+Most modules flag the same way regardless of assay type — if it warns, check it. A few behave differently depending on what you sequenced:
+
+- **Per-Base Sequence Quality:** Matters for all assays. A slight 3' quality dip is normal.
+- **Per-Tile Sequence Quality:** Matters for all assays. Only investigate if the pattern is severe or widespread.
+- **Per-Sequence Quality Scores:** Matters for all assays. A bimodal distribution is a problem; a single peak at high quality is fine.
+- **Per-Base Sequence Content:** Expected to fail for RNA-seq and ChIP-seq/ATAC-seq. The first 10–15 bases wobble due to hexamer priming — this is normal and not a reason to discard the data.
+- **Per-Sequence GC Content:** Matters for WGS and RNA-seq. ChIP-seq and ATAC-seq show some expected bias.
+- **Per-Base N Content:** Matters for all assays. High N across the read usually means the run failed.
+- **Sequence Duplication:** Expected to fail for RNA-seq (highly expressed genes produce many identical reads — that's biology, not a problem). High duplication in WGS is a real concern.
+- **Overrepresented Sequences:** Matters for all assays. In RNA-seq, abundant transcripts will trigger this; check whether the flagged sequences are biologically expected.
+- **Adapter Content:** Always trim before alignment, regardless of assay type.
+- **Sequence Length Distribution:** Ignore this warning after trimming — variable read length after quality filtering is expected.
 
 ## Aggregating Reports with MultiQC
 
@@ -306,20 +306,18 @@ The HTML report shows before/after quality, how many reads got dropped and why, 
 
 ### fastp Parameter Reference
 
-| Parameter | Default | Description | When to Change |
-|---|---|---|---|
-| `--qualified_quality_phred` | 15 | Bases below this quality are "unqualified" | Use **20** for standard analysis; **30** for variant calling |
-| `--unqualified_percent_limit` | 40 | Drop read if this % of bases are unqualified | Lower for stricter filtering |
-| `--length_required` | 15 | Discard reads shorter than this after trimming | Use **50** for most Illumina data |
-| `--detect_adapter_for_pe` | off | Auto-detect adapters via paired-end overlap | **Always enable** for paired-end data |
-| `--adapter_sequence` | auto | Specify adapter sequence manually | Only if auto-detection fails |
-| `--cut_front` | off | Sliding window trimming from 5' end | Enable for data with 5' quality issues |
-| `--cut_tail` | off | Sliding window trimming from 3' end | Enable for data with 3' quality drop-off |
-| `--cut_window_size` | 4 | Window size for sliding window trimming | Larger window = more aggressive trimming |
-| `--cut_mean_quality` | 20 | Quality threshold for sliding window | Match to `--qualified_quality_phred` |
-| `--trim_poly_g` | auto | Trim poly-G tails | Important for **NovaSeq/NextSeq** (two-color chemistry artifact) |
-| `--correction` | off | Overlap-based error correction for PE reads | Enable for variant calling workflows |
-| `--thread` | 1 | Number of processing threads | Use **4** for good performance |
+The parameters you'll change most often:
+
+- **`--qualified_quality_phred`** (default 15): Bases scoring below this are treated as unqualified. Use 20 for most analyses; bump to 30 for variant calling.
+- **`--unqualified_percent_limit`** (default 40): Drop a read if this percentage of its bases are unqualified. Lower this for stricter filtering.
+- **`--length_required`** (default 15): Discard reads shorter than this after trimming. Set to 50 for typical Illumina data.
+- **`--detect_adapter_for_pe`** (default off): Automatically detects adapters using paired-end read overlap. Enable this for all paired-end data.
+- **`--adapter_sequence`** (default auto): Specify an adapter manually only if auto-detection fails.
+- **`--cut_front` / `--cut_tail`** (default off): Sliding-window quality trimming from the 5' or 3' end. Enable if your data has quality drops at either end.
+- **`--cut_window_size`** (default 4) / **`--cut_mean_quality`** (default 20): Window size and quality threshold for sliding-window trimming.
+- **`--trim_poly_g`** (default auto): Trims poly-G tails — important for NovaSeq and NextSeq, which produce poly-G artifacts from dark cycles.
+- **`--correction`** (default off): Overlap-based error correction for paired reads. Worth enabling for variant calling.
+- **`--thread`** (default 1): Number of threads. Use 4 for reasonable throughput.
 
 ::: {.callout-note}
 ## When NOT to Trim Aggressively
@@ -359,19 +357,17 @@ There's no magic number. It depends on what you're doing, your organism, and you
 
 Use this table to decide what action to take based on what you see in FastQC or MultiQC.
 
-| Scenario | Action |
-|---|---|
-| Adapter content > 5% | Trim with fastp (`--detect_adapter_for_pe`). Re-run FastQC to confirm removal. |
-| Mean quality < Q25 across the run | Apply quality filtering with fastp. If quality is still poor after trimming, consider re-sequencing. |
-| Quality drops sharply at the 3' end | Normal for Illumina. Light trimming with fastp is sufficient. |
-| GC content is bimodal | Investigate contamination. BLAST overrepresented sequences. Consider a decontamination tool (e.g., Kraken2). |
-| High duplication in WGS | Low library complexity — may need re-sequencing with more input DNA. Mark duplicates with Picard. |
-| High duplication in RNA-seq | **Normal** — highly expressed genes produce many identical reads. Not a QC failure; do not position-deduplicate. |
-| Overrepresented adapter sequences | Trim with fastp. Confirm removal with FastQC. |
-| Overrepresented biological sequences | BLAST the sequence. May be rRNA contamination in RNA-seq; consider rRNA depletion. |
-| Per-base sequence content wobbles at 5' end | **Normal** — random hexamer priming bias. No action needed. |
-| Very low read count for one sample | Check library prep and sequencing depth. May need re-sequencing or exclusion from analysis if depth is insufficient. |
-| One sample is a clear outlier in MultiQC | Investigate before including in analysis. Look at all modules for that sample together. |
+- **Adapter content > 5%:** Trim with fastp (`--detect_adapter_for_pe`), then re-run FastQC to confirm it's gone.
+- **Mean quality < Q25 across the run:** Apply quality filtering with fastp. If quality is still poor after trimming, the data may need to be re-sequenced.
+- **Quality drops sharply at the 3' end:** Normal for Illumina. Light trimming with fastp is sufficient.
+- **GC content is bimodal:** Investigate contamination. BLAST the overrepresented sequences and consider a decontamination tool like Kraken2.
+- **High duplication in WGS:** Low library complexity — you may need to re-sequence with more input DNA. Mark duplicates with Picard for downstream analysis.
+- **High duplication in RNA-seq:** Normal. Highly expressed genes produce many nearly identical reads. Don't position-deduplicate RNA-seq data.
+- **Overrepresented adapter sequences:** Trim with fastp, then confirm removal with FastQC.
+- **Overrepresented biological sequences:** BLAST the sequence. In RNA-seq this is often rRNA contamination; consider rRNA depletion at the library prep stage.
+- **Per-base sequence content wobbles at the 5' end:** Normal — this is random hexamer priming bias. No action needed.
+- **Very low read count for one sample:** Check library prep records and sequencing logs. May need re-sequencing, or exclusion if depth is too low for your analysis.
+- **One sample is a clear outlier in MultiQC:** Dig into that sample across all modules before including it in downstream analysis.
 
 ## A Complete QC Workflow
 
@@ -433,7 +429,7 @@ samtools stats sample.bam > sample.stats.txt
 | Mapping rate (RNA-seq) | > 70% | Lower than WGS due to intron-spanning reads and transcriptome complexity |
 | Properly paired reads | > 90% | High discordant pairs → library prep problem or data corruption |
 | Duplicate rate (WGS) | < 30% | Higher rates → low input material or over-amplification |
-| Insert size distribution | Matches library prep target (e.g., 300–500 bp) | Bimodal distribution = mixed library; very short = degraded sample |
+| Insert size distribution | Matches library prep target | Bimodal = mixed library; very short = degraded sample |
 
 MultiQC can aggregate `samtools flagstat` and `samtools stats` output alongside FastQC results, giving a single report that spans raw reads through alignment.
 
@@ -451,7 +447,7 @@ After calling variants with GATK, DeepVariant, or similar tools, check these sta
 |---|---|---|
 | Ti/Tv ratio | 2.0–2.1 (WGS), 2.8–3.0 (exome) | Lower than expected → excess false positive SNP calls |
 | Het/Hom ratio | 1.5–2.0 | Very high → contamination; very low → inbreeding or sample swap |
-| Total SNP count | ~3–4 million per human genome | Far more → false positives; far fewer → low coverage or wrong sample |
+| Total SNP count | ~3–4 M per human genome | Far more → false positives; far fewer → low coverage or wrong sample |
 
 ### RNA-seq Specific QC
 
@@ -488,13 +484,13 @@ seqkit stats -a -N 50 sample.fastq.gz
 |---|---|
 | QC at every stage | Raw reads → trimmed reads → alignment → variant calling → assembly; each has its own metrics |
 | Q30 fraction | Headline Illumina quality metric; >80% Q30 is the standard passing threshold |
-| Per-Base Sequence Quality | Most important FastQC module; watch for early 3' quality drops or uniform low quality |
-| Per-Base Sequence Content | Expected to fail for RNA-seq (hexamer bias), amplicon, ATAC-seq — not a problem |
-| Sequence Duplication | Expected to fail for RNA-seq; high duplication in WGS indicates low library complexity |
-| Adapter Content | Rising adapter signal → insert shorter than read length → trim before alignment |
+| Per-Base Sequence Quality | Most important module; watch for early 3' drops or uniform low quality |
+| Per-Base Sequence Content | Expected to fail for RNA-seq (hexamer bias), amplicon, ATAC-seq |
+| Sequence Duplication | Expected to fail for RNA-seq; high duplication in WGS = low library complexity |
+| Adapter Content | Rising signal → insert shorter than read length → trim before alignment |
 | Overrepresented Sequences | Adapter dimers or biological contaminants; BLAST unknowns |
-| MultiQC | Aggregates FastQC (and other tool) reports; essential for multi-sample experiments; best for spotting outliers |
-| fastp | All-in-one trimmer; always use `--detect_adapter_for_pe` for paired-end data; produces its own HTML report |
+| MultiQC | Aggregates reports across tools and samples; best way to spot outliers |
+| fastp | All-in-one trimmer; always enable `--detect_adapter_for_pe` for paired-end data |
 | "Good enough" thresholds | >80% Q30, <5% adapter after trim, >85% reads retained, <30% duplication (WGS) |
 | QC Decision Guide | Match the scenario to action: trim, filter, investigate contamination, or re-sequence |
 | Alignment QC | Mapping rate (>90% WGS), duplicate rate, insert size, properly paired reads |

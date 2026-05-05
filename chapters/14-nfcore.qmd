@@ -96,7 +96,7 @@ The single-dash options are for Nextflow itself:
 | Option | Meaning |
 |---|---|
 | `-r` | Use a specific pipeline release. |
-| `-profile` | Choose an execution environment, such as Docker, Apptainer, Singularity, or an institutional profile. |
+| `-profile` | Execution environment: Docker, Apptainer, Singularity, or an institutional profile. |
 | `-resume` | Reuse completed tasks if the run is restarted. |
 | `-params-file` | Read pipeline parameters from a YAML or JSON file. |
 | `-with-report` | Write an HTML execution report. |
@@ -209,12 +209,7 @@ Rows with the same sample name may be treated as technical replicates in some pi
 
 nf-core pipelines usually write results into the folder you set with `--outdir`. The exact folder names depend on the pipeline, but many runs include these outputs:
 
-| Output | What to check |
-|---|---|
-| `multiqc/multiqc_report.html` | The first report to open. It summarizes quality control across tools and samples. |
-| `pipeline_info/` | Software versions, run reports, trace files, and execution metadata. Keep this folder. |
-| Tool-specific folders | Results from aligners, quantifiers, variant callers, or other analysis tools. |
-| Merged result tables | Count matrices, variant tables, abundance tables, or other final analysis files. |
+Start with `multiqc/multiqc_report.html` — it summarizes QC across all tools and samples. Always keep the `pipeline_info/` folder; it records software versions, run reports, and trace files. Tool-specific subdirectories hold alignments, quantifications, or variant calls, and the final merged result tables (count matrices, variant tables, etc.) are usually nearby.
 
 For biologists, the most important first step is usually to open the MultiQC report. Look for failed samples, low read quality, adapter contamination, low mapping rate, unexpected strandedness, or large differences between samples.
 

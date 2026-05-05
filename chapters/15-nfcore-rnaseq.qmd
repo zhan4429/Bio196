@@ -71,12 +71,10 @@ TREATED_REP2,/data/raw/TREAT2_R1.fastq.gz,/data/raw/TREAT2_R2.fastq.gz,auto
 
 ![The first four samplesheet columns tell the pipeline what each library is, where its FASTQ files live, and how reads relate to RNA strand.](../images/15-nfcore-rnaseq-samplesheet.png){#fig-nfcore-rnaseq-samplesheet fig-align="center" width="90%"}
 
-| Column | Meaning |
-|---|---|
-| `sample` | A clear sample name. Letters, numbers, underscores. Use biologically meaningful names like `CONTROL_REP1`, not `s1`. |
-| `fastq_1` | Read 1 FASTQ file, gzipped. Full path on shared systems. |
-| `fastq_2` | Read 2 FASTQ file. Leave empty for single-end data. |
-| `strandedness` | One of `unstranded`, `forward`, `reverse`, or `auto`. Use `auto` if unsure. |
+- **`sample`:** A readable label for this library — letters, numbers, and underscores only. Use something like `CONTROL_REP1`, not `s1`.
+- **`fastq_1`:** Path to the gzipped R1 FASTQ file. Use full absolute paths on shared systems.
+- **`fastq_2`:** Path to the R2 file. Leave blank for single-end data.
+- **`strandedness`:** One of `unstranded`, `forward`, `reverse`, or `auto`. When in doubt, use `auto`.
 
 A few rules carry over to almost every nf-core pipeline:
 
@@ -145,12 +143,10 @@ Parameter files beat long command lines because they're easy to share, easy to v
 
 `-profile` selects how each process gets its software. The same pipeline runs unchanged on three engines; you pick the one your system supports:
 
-| Profile | Where it fits |
-|---|---|
-| `docker` | Personal laptops and workstations with root or Docker Desktop. |
-| `apptainer` | Most modern HPC clusters. Successor to Singularity. |
-| `singularity` | Older HPC clusters still on Singularity. |
-| `<institution>` (e.g. `tufts`, `crick`) | Sites with a curated nf-core config that sets the executor, queue, and cache. Use this if it exists. |
+- **`docker`:** Laptops and workstations with Docker Desktop or root access.
+- **`apptainer`:** Most modern HPC clusters. This is the Singularity successor.
+- **`singularity`:** Older HPC clusters still running the original Singularity.
+- **`<institution>`** (e.g., `tufts`, `crick`): Sites with a pre-built nf-core configuration covering executor, queue, and container cache. Use this if your cluster has one.
 
 On HPC, set a shared container cache once so images are downloaded only once for the whole lab:
 
@@ -229,23 +225,19 @@ The `results_rnaseq/` folder will have many subdirectories. You won't need all o
 
 ![A simple map of the most important nf-core/rnaseq output directories and which files to read first.](../images/15-nfcore-rnaseq-outputs.png){#fig-nfcore-rnaseq-outputs fig-align="center" width="95%"}
 
-| Artifact | Why it matters |
-|---|---|
-| `multiqc/multiqc_report.html` | The single HTML page that summarizes QC across every sample and every tool. Open this first. |
-| `pipeline_info/software_versions.yml` | The exact version of every tool the pipeline ran. Paste straight into a methods section. |
-| `pipeline_info/execution_report.html` | Per-task wall time, CPU, memory, and exit status. Use this when tuning resources or diagnosing failures. |
-| `pipeline_info/execution_timeline.html` | Visual timeline of when each task ran — useful for spotting bottlenecks. |
-| `pipeline_info/execution_trace.txt` | Machine-readable trace of every task; good for scripting or auditing. |
+- **`multiqc/multiqc_report.html`:** The QC summary across every sample and every tool. Open this first.
+- **`pipeline_info/software_versions.yml`:** Exact versions of every tool the pipeline ran. Paste this directly into your methods section.
+- **`pipeline_info/execution_report.html`:** Per-task wall time, CPU, memory, and exit status — useful for tuning resources or diagnosing failures.
+- **`pipeline_info/execution_timeline.html`:** Visual timeline of task execution. Good for spotting bottlenecks.
+- **`pipeline_info/execution_trace.txt`:** Machine-readable task trace, useful for scripting or auditing runs.
 
 The other directories — `fastqc/`, `fastp/`, `star_salmon/`, `salmon/`, `multiqc/multiqc_data/`, and so on — fall into a small number of categories:
 
-| Category | Where to look | What's there |
-|---|---|---|
-| Raw and trimmed read QC | `fastqc/`, `fastp/` or `trimgalore/` | Per-sample HTML reports, also rolled up into MultiQC. |
-| Alignment outputs | `<aligner>/` (e.g. `star_salmon/`) | BAM, BAI, log files, optional bigWig coverage tracks. |
-| Quantification matrices | `<aligner>/` and/or `salmon/` | Gene- and transcript-level counts, TPM, and a `SummarizedExperiment` RDS for R users. |
-| Post-alignment QC | `rseqc/`, `qualimap/`, `dupradar/`, `preseq/` | Strandedness, gene-body coverage, duplication patterns, library complexity. |
-| Pipeline metadata | `pipeline_info/` | Software versions, execution reports, run trace. |
+- **Raw and trimmed read QC** (`fastqc/`, `fastp/` or `trimgalore/`): Per-sample HTML reports, all rolled up into MultiQC.
+- **Alignment outputs** (`star_salmon/` or similar): BAM and BAI files, alignment logs, and optional bigWig coverage tracks.
+- **Quantification matrices** (`star_salmon/` and/or `salmon/`): Gene- and transcript-level counts, TPM values, and a `SummarizedExperiment` RDS object for R users.
+- **Post-alignment QC** (`rseqc/`, `qualimap/`, `dupradar/`, `preseq/`): Strandedness checks, gene-body coverage, duplication patterns, library complexity estimates.
+- **Pipeline metadata** (`pipeline_info/`): Software versions, execution reports, run trace.
 
 The biological interpretation of those matrices — picking counts vs. TPM, choosing a differential expression model, drawing PCA — is covered in the RNA-seq chapter earlier in this course reader.
 
@@ -264,14 +256,12 @@ If all six pass, you have a clean, reproducible run that someone else can take f
 
 ## Common Problems and Fixes
 
-| Problem | Likely cause | Fix |
-|---|---|---|
-| `Sample sheet validation failed` | Missing required column or invalid `strandedness` value | Re-check the four required columns and allowed values. |
-| Pipeline cannot find FASTQ files | Relative paths in the samplesheet | Use full absolute paths. |
-| STAR fails with exit code 137 | Out of memory | Raise `--max_memory`, request a larger node, or add a `withName: STAR_ALIGN` resource override in a custom config. |
-| `-resume` re-runs everything | Inputs, parameters, or `work/` directory changed since the last run | Restore `work/`; keep parameters identical when resuming. |
-| Strandedness mismatch warning in MultiQC | Samplesheet value disagrees with what the pipeline inferred | Confirm the library kit, fix the samplesheet, re-run. |
-| Containers fail to pull on HPC | Cluster nodes have no internet access | Pre-pull on a login node, or use `nf-core pipelines download` to stage everything offline. |
+- **`Sample sheet validation failed`:** A required column is missing or the `strandedness` value is misspelled. Re-check the four required columns and their allowed values.
+- **Pipeline cannot find FASTQ files:** You used relative paths. Switch to full absolute paths in the samplesheet.
+- **STAR fails with exit code 137:** Out of memory. Raise `--max_memory`, request a larger compute node, or add a `withName: STAR_ALIGN` block in a custom config to increase memory.
+- **`-resume` re-runs everything:** Something changed — inputs, parameters, or the `work/` directory location. Keep parameters identical between runs when resuming.
+- **Strandedness mismatch warning in MultiQC:** The samplesheet value doesn't match what the pipeline inferred from the data. Confirm your library protocol, fix the samplesheet, and re-run.
+- **Containers fail to pull on HPC:** Compute nodes often have no internet access. Pre-pull images on the login node, or use `nf-core pipelines download` to stage everything before submitting jobs.
 
 ## Summary
 

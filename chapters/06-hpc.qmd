@@ -178,10 +178,7 @@ rsync -avzP rnaseq_demo remote:rnaseq_demo/
 
 Tufts HPC storage is shared across login and compute nodes. Copy a file to cluster storage once, and your job can access it from any node.
 
-| Storage area | Tufts path | Use for |
-|---|---|---|
-| Home | `/cluster/home/your_utln` | Scripts, small data, notebooks, configuration files |
-| Lab project storage | `/cluster/tufts/your_lab_name/your_utln` | Shared lab data, larger project inputs, final outputs |
+Your **home directory** (`/cluster/home/your_utln`) is for scripts, notebooks, and small files — it has a fixed quota, so don't fill it with sequencing data. For larger datasets and shared lab work, use your **lab project space** at `/cluster/tufts/your_lab_name/your_utln`.
 
 Tufts home directories are fixed-size, meant for modest storage. If you're working with a lab, use lab project storage for larger datasets. Check usage with:
 

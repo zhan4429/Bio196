@@ -66,7 +66,7 @@ These habits prevent most beginner mistakes:
 
 | Practice | Why it matters |
 |---|---|
-| Pin pipeline versions with `-r` when running remote pipelines | A later release may change tools, parameters, or output names. |
+| Pin versions with `-r` for remote pipelines | Tools and outputs can change between releases. |
 | Run the test profile first | Confirms Nextflow, containers, network access, and executor settings. |
 | Use `-params-file` for project parameters | Keeps long commands readable and shareable. |
 | Use `-resume` after fixing a failed run | Reuses completed tasks instead of starting over. |

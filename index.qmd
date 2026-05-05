@@ -1,13 +1,14 @@
 ---
-title: ""
 pagetitle: "Bio196-22 Computing for Bioinformatics"
-toc: false
-number-sections: false
 format:
   html:
+    toc: false
     include-in-header:
       text: |
         <style>
+          #title-block-header {
+            display: none;
+          }
           .course-title-page {
             min-height: 62vh;
             display: flex;
@@ -31,8 +32,12 @@ format:
         </style>
 ---
 
+```{=latex}
+\iffalse
+```
+
 ::: {.course-title-page}
-# Bio196-22 Computing for Bioinformatics
+# Bio196-22 Computing for Bioinformatics {.unnumbered .unlisted}
 
 ::: {.subtitle}
 Linux, HPC, environments, workflows, and reproducible analysis
@@ -43,3 +48,7 @@ Yucheng Zhang and Shirley Li
 Tufts University
 :::
 :::
+
+```{=latex}
+\fi
+```

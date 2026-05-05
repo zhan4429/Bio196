@@ -24,10 +24,7 @@ Real RNA-seq analyses have two parts:
 
 Two main paths to quantification:
 
-| Strategy | Main idea | Typical tools | Best for |
-|---|---|---|---|
-| Genome alignment | Align reads to the genome, then count overlaps with annotated genes or exons. | STAR, HISAT2, featureCounts, HTSeq | Inspectable alignments, novel junction checks, organisms with good genome annotations |
-| Transcriptome quantification | Assign reads directly to known transcripts and estimate transcript abundance. | Salmon, kallisto, tximport | Fast routine quantification, transcript-aware gene summaries |
+**Genome alignment** (STAR or HISAT2, then featureCounts or HTSeq) aligns reads to the full genome and counts overlaps with annotated genes. It's slower but gives you BAM files you can open in IGV — useful when you suspect a library problem or want to verify a surprising result. **Transcriptome quantification** (Salmon or kallisto, imported with tximport) skips the alignment step and assigns reads directly to transcript sequences. It's much faster and handles multi-mapping reads more carefully, but depends on your reference transcriptome being complete and correct.
 
 Both work. Alignment gives you BAM files to eyeball in IGV when something smells wrong. Salmon and kallisto are fast and handle isoforms natively, but they depend hard on your reference being right.
 
@@ -907,15 +904,13 @@ Use the right background universe — genes that could have been detected, not e
 
 ## Common Failure Modes
 
-| Symptom | Possible cause | First checks |
-|---|---|---|
-| Low mapping rate | Wrong organism, contamination, poor quality, adapters | FastQC, Kraken/FastQ Screen, reference version |
-| Low assigned reads | Wrong annotation, wrong strandedness, intronic reads | featureCounts summary, GTF chromosome names |
-| PCA separates by batch | Library prep or sequencing batch effect | Metadata, design formula, sample processing records |
-| One replicate is an outlier | Sample swap, failed library, contamination | MultiQC, mapping logs, sample distance heatmap |
-| Many mitochondrial/rRNA reads | RNA degradation or incomplete depletion | QC reports, biotype summaries |
-| No significant genes | Low power, weak effect, high variance, wrong contrast | Replicate count, dispersion plot, contrast direction |
-| Thousands of genes significant | Strong biology, confounding, normalization problem | MA plot, composition bias, sample metadata |
+- **Low mapping rate** — often the wrong organism, contamination, low quality reads, or unadapted adapters. Check with FastQC; try Kraken or FastQ Screen; verify your reference genome version.
+- **Low assigned reads** — wrong annotation, wrong strandedness, or too many intronic reads. Check the featureCounts summary file and confirm chromosome names match between your GTF and genome.
+- **PCA separates by batch** — library prep or sequencing batch effect. Review your metadata, check sample processing records, and update your design formula.
+- **One replicate is an outlier** — possible sample swap, failed library, or contamination. Look at MultiQC, alignment logs, and the sample distance heatmap together.
+- **Many mitochondrial or rRNA reads** — RNA degradation or incomplete rRNA depletion. Check QC reports and run biotype-level summaries.
+- **No significant genes** — low statistical power, weak biological effect, high variance, or the wrong contrast. Check replicate count, the dispersion plot, and that your contrast is specified correctly.
+- **Thousands of genes significant** — possibly real biology, but also check for confounding, composition bias, or a normalization problem. MA plot and `plotDispEsts` are good starting points.
 
 ## Reporting Checklist
 
